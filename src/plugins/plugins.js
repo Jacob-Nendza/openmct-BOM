@@ -60,6 +60,7 @@ import LocalStorage from './localStorage/plugin.js';
 import LocalTimeSystem from './localTimeSystem/plugin.js';
 import MyItems from './myItems/plugin.js';
 import BOMDataPlugin from './bomData/plugin.js';
+import XPlanePlugin from './xplane/plugin.js';
 import NewFolderAction from './newFolderAction/plugin.js';
 import { NotebookPlugin, RestrictedNotebookPlugin } from './notebook/plugin.js';
 import NotificationIndicator from './notificationIndicator/plugin.js';
@@ -113,6 +114,7 @@ plugins.RemoteClock = RemoteClock;
 
 plugins.MyItems = MyItems;
 plugins.BOMData = BOMDataPlugin;
+plugins.XPlane = XPlanePlugin;
 
 plugins.StaticRootPlugin = StaticRootPlugin;
 

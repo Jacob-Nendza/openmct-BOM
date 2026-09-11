@@ -1,5 +1,3 @@
-function DictionaryPlugin() {
-    return function install() {
-        console.log("I've been installed!");
-    }
-};
+// Leftover from an earlier attempt — not imported or referenced anywhere.
+// Superseded by src/plugins/xplane/ (registered in src/plugins/plugins.js
+// as openmct.plugins.XPlane()). Safe to delete this file.

@@ -1,0 +1,14 @@
+{
+  "name": "xplane-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UDP-to-WebSocket/HTTP bridge streaming X-Plane 11 telemetry into Open MCT",
+  "main": "bridge-server.js",
+  "scripts": {
+    "start": "node bridge-server.js",
+    "test-connection": "node test-connection.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

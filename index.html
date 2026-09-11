@@ -28,6 +28,9 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>Open MCT</title>
     <script src="dist/openmct.js"></script>
+	<script>
+  window.XPLANE_BRIDGE_URL = 'http://localhost:8081';
+</script>
     <link
       rel="icon"
       type="image/png"
@@ -109,6 +112,7 @@
       openmct.install(openmct.plugins.Espresso());
       openmct.install(openmct.plugins.MyItems());
 	  openmct.install(openmct.plugins.BOMData());
+      openmct.install(openmct.plugins.XPlane());
       openmct.install(
         openmct.plugins.PlanLayout({
           creatable: true
