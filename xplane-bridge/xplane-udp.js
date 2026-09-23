@@ -19,9 +19,18 @@ const PACKET_LENGTH = RREF_HEADER.length + 4 + 4 + DATAREF_FIELD_LENGTH;
 class XPlaneUDP extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.xplaneHost = options.xplaneHost || '127.0.0.1';
-    this.xplanePort = options.xplanePort || 49000;
-    this.localPort = options.localPort || 49001;
+    this.xplaneHost = options.xplaneHost || process.env.XPLANE_HOST || '127.0.0.1';
+    this.xplanePort = options.xplanePort || Number(process.env.XPLANE_PORT) || 49000;
+    // Port 0 = let the OS pick a free port. X-Plane replies to whatever port
+    // the request came from, and X-Plane 11 itself uses 49001 as its own
+    // sending port, so binding 49001 here can collide with it on the same PC.
+    this.localPort = options.localPort || 0;
+    // If no data has arrived for this long, re-send the subscriptions. This
+    // covers starting the bridge before X-Plane, or loading a new flight.
+    this.resubscribeMs = options.resubscribeMs || 3000;
+    this.lastDataAt = 0;
+    this.connected = false;
+    this.watchdog = null;
     this.frequencyHz = options.frequencyHz || 10;
     this.datarefs = options.datarefs || [];
     this.indexToKey = new Map();
@@ -36,14 +45,27 @@ class XPlaneUDP extends EventEmitter {
       this.socket.once('error', reject);
       this.socket.bind(this.localPort, () => {
         this._subscribeAll();
+        this.watchdog = setInterval(() => this._checkConnection(), this.resubscribeMs);
         resolve();
       });
     });
   }
 
   stop() {
+    clearInterval(this.watchdog);
     this._unsubscribeAll();
     this.socket.close();
+  }
+
+  _checkConnection() {
+    const silentFor = Date.now() - this.lastDataAt;
+    if (silentFor > this.resubscribeMs) {
+      if (this.connected) {
+        this.connected = false;
+        this.emit('disconnected');
+      }
+      this._subscribeAll();
+    }
   }
 
   _subscribeAll() {
@@ -89,6 +111,11 @@ class XPlaneUDP extends EventEmitter {
       const key = this.indexToKey.get(index);
 
       if (key) {
+        this.lastDataAt = Date.now();
+        if (!this.connected) {
+          this.connected = true;
+          this.emit('connected');
+        }
         this.emit('data', { key, rawValue, timestamp: Date.now() });
       }
     }

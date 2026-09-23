@@ -23,6 +23,21 @@ export default function XPlanePlugin() {
   return function install(openmct) {
     openmct.install(XPlaneDictionaryPlugin());
     openmct.install(XPlaneHistoricalTelemetryPlugin());
-    openmct.install(XPlaneRealtimeTelemetryPlugin());
+    // "X-Plane paused" badge in Open MCT's top bar (upper right, above the
+    // chart). Hidden while the sim is running; shown while X-Plane is paused.
+    const pauseIndicator = openmct.indicators.simpleIndicator();
+    pauseIndicator.iconClass('icon-pause');
+    pauseIndicator.statusClass('s-status-warning');
+    pauseIndicator.description('X-Plane is paused. Telemetry recording is on hold until the sim resumes.');
+    pauseIndicator.text(''); // empty text = hidden
+    openmct.indicators.add(pauseIndicator);
+
+    openmct.install(
+      XPlaneRealtimeTelemetryPlugin({
+        onStatus: function (status) {
+          pauseIndicator.text(status.paused ? 'X-Plane paused' : '');
+        }
+      })
+    );
   };
 }

@@ -38,8 +38,8 @@ xplane.start().then(() => {
       console.log('  1. X-Plane 11 is running with a flight loaded');
       console.log('  2. Settings > Network in X-Plane has "Accept incoming connections" on,');
       console.log('     and this machine is the one X-Plane is running on (127.0.0.1) —');
-      console.log('     edit xplaneHost in bridge-server.js if X-Plane runs elsewhere');
-      console.log('  3. No firewall is blocking UDP ports 49000/49001');
+      console.log('     if X-Plane runs on another PC, set XPLANE_HOST to its IP address');
+      console.log('  3. No firewall is blocking UDP port 49000, or blocking Node.js');
     }
 
     process.exit(0);

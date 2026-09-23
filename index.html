@@ -243,6 +243,12 @@
       openmct.install(openmct.plugins.EventTimestripPlugin(timeLinePlugin.extendedLinesBus));
       document.addEventListener('DOMContentLoaded', function () {
         openmct.start();
+        // Open in Real-time mode (a moving window that follows the clock) so
+        // live X-Plane / BOM telemetry is drawn as it arrives. In the default
+        // Fixed mode the window stops at page-load time, so new points land
+        // off the right edge of every plot and no line appears.
+        openmct.time.setClock('local');
+        openmct.time.setMode('realtime', { start: -FIFTEEN_MINUTES, end: THIRTY_SECONDS });
       });
     </script>
   </head>

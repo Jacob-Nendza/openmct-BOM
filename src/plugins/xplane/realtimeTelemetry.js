@@ -12,7 +12,11 @@ function getBridgeWsUrl() {
   return httpUrl.replace(/^http/, 'ws') + '/realtime';
 }
 
-export default function XPlaneRealtimeTelemetryPlugin() {
+export default function XPlaneRealtimeTelemetryPlugin(options = {}) {
+  // options.onStatus(status) is called with {paused: true|false} whenever the
+  // bridge reports a change in X-Plane's pause state (see plugin.js).
+  const onStatus = options.onStatus || function () {};
+
   return function install(openmct) {
     const listenersByKey = {};
     let socket = null;
@@ -32,6 +36,11 @@ export default function XPlaneRealtimeTelemetryPlugin() {
           return;
         }
 
+        if (datum.type === 'status') {
+          onStatus(datum);
+          return;
+        }
+
         const listeners = listenersByKey[datum.key];
         if (listeners) {
           listeners.forEach((callback) => callback(datum));
@@ -39,6 +48,7 @@ export default function XPlaneRealtimeTelemetryPlugin() {
       };
 
       socket.onclose = function () {
+        onStatus({ paused: false }); // bridge gone: don't leave a stale "paused" badge up
         setTimeout(ensureSocket, 2000);
       };
 
@@ -46,6 +56,10 @@ export default function XPlaneRealtimeTelemetryPlugin() {
         socket.close();
       };
     }
+
+    // Connect right away (not only when a plot opens) so the pause indicator
+    // is accurate on every screen.
+    ensureSocket();
 
     openmct.telemetry.addProvider({
       supportsSubscribe: function (domainObject) {
