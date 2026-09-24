@@ -12,8 +12,8 @@
  * telemetry looks like to Open MCT; it never touches the network itself.
  */
 
-const NAMESPACE = 'xplane.taxonomy';
-const AIRCRAFT_FOLDER_KEY = 'xplaneAircraft';
+export const NAMESPACE = 'xplane.taxonomy';
+export const AIRCRAFT_FOLDER_KEY = 'xplaneAircraft';
 
 // Keep this list's `key` values in sync with xplane-bridge/datarefs.js —
 // the bridge server uses the same keys when it broadcasts samples.

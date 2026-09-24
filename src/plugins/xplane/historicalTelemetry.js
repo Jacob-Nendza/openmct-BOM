@@ -6,13 +6,10 @@
  * bridge server for whatever samples it currently has buffered for that
  * measurement.
  *
- * Set window.XPLANE_BRIDGE_URL in index.html to point at wherever
- * xplane-bridge/bridge-server.js is running (default http://localhost:8081).
+ * The bridge address comes from ../dataSource/bridgeClient.js.
  */
 
-function getBridgeUrl() {
-  return window.XPLANE_BRIDGE_URL || 'http://localhost:8081';
-}
+import bridgeClient from '../dataSource/bridgeClient.js';
 
 export default function XPlaneHistoricalTelemetryPlugin() {
   return function install(openmct) {
@@ -23,7 +20,7 @@ export default function XPlaneHistoricalTelemetryPlugin() {
       request: function (domainObject) {
         const key = domainObject.identifier.key;
 
-        return fetch(`${getBridgeUrl()}/history/${key}`)
+        return fetch(bridgeClient.historyUrl('xplane', key))
           .then((response) => {
             if (!response.ok) {
               throw new Error(`bridge returned ${response.status}`);
