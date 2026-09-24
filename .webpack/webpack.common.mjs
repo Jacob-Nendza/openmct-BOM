@@ -54,6 +54,8 @@ const config = {
     espressoTheme: './src/plugins/themes/espresso-theme.scss',
     snowTheme: './src/plugins/themes/snow-theme.scss',
     darkmatterTheme: './src/plugins/themes/darkmatter-theme.scss',
+    daylightTheme: './src/plugins/themes/daylight-theme.scss',
+    lowlightTheme: './src/plugins/themes/lowlight-theme.scss',
     historicalTelemetryWorker: './src/plugins/condition/historicalTelemetryWorker.js',
   },
   output: {
