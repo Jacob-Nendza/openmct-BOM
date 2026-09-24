@@ -62,6 +62,7 @@ import MyItems from './myItems/plugin.js';
 import BOMDataPlugin from './bomData/plugin.js';
 import DataSourcePlugin from './dataSource/plugin.js';
 import XPlanePlugin from './xplane/plugin.js';
+import ThemeSelectorPlugin from './themeSelector/plugin.js';
 import NewFolderAction from './newFolderAction/plugin.js';
 import { NotebookPlugin, RestrictedNotebookPlugin } from './notebook/plugin.js';
 import NotificationIndicator from './notificationIndicator/plugin.js';
@@ -117,6 +118,7 @@ plugins.MyItems = MyItems;
 plugins.BOMData = BOMDataPlugin;
 plugins.DataSource = DataSourcePlugin;
 plugins.XPlane = XPlanePlugin;
+plugins.ThemeSelector = ThemeSelectorPlugin;
 
 plugins.StaticRootPlugin = StaticRootPlugin;
 

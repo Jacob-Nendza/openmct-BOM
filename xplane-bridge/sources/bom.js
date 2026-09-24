@@ -6,7 +6,8 @@
  * Same shape as sources/xplane.js: create() returns { start(), stop() }, and
  * nothing happens until the Source dropdown in Open MCT selects "Levil BOM".
  *
- * The BOM broadcasts GDL90 packets over UDP (port 4000 by default). This
+ * The BOM broadcasts GDL90 packets over UDP to port 43211 (confirmed with a
+ * packet capture of the real BOM, 2026-09-24 - NOT the usual GDL90 port 4000). This
  * source listens on that port, decodes each packet with ../gdl90.js and
  * reports every value through onData({ key, value, timestamp }).
  *
@@ -27,7 +28,7 @@
 const dgram = require('dgram');
 const gdl90 = require('../gdl90.js');
 
-const PORT = Number(process.env.BOM_PORT) || 4000;
+const PORT = Number(process.env.BOM_PORT) || 43211;
 const QUIET_AFTER_MS = 3000; // no packets for this long = "BOM went quiet"
 
 // Which decoded field becomes which Open MCT key.
