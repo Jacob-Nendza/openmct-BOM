@@ -34,16 +34,25 @@ class XPlaneUDP extends EventEmitter {
     this.frequencyHz = options.frequencyHz || 10;
     this.datarefs = options.datarefs || [];
     this.indexToKey = new Map();
-    this.socket = dgram.createSocket('udp4');
+    this.socket = null; // created in start(), closed in stop(), so the client can be restarted
   }
 
+  // Opens a UDP socket and asks X-Plane to start streaming the datarefs.
   start() {
+    if (this.socket) {
+      return Promise.resolve(); // already running
+    }
+
+    this.lastDataAt = 0;
+    this.connected = false;
+    this.socket = dgram.createSocket('udp4');
     this.socket.on('message', (message) => this._handleMessage(message));
-    this.socket.on('error', (error) => this.emit('error', error));
 
     return new Promise((resolve, reject) => {
       this.socket.once('error', reject);
       this.socket.bind(this.localPort, () => {
+        this.socket.removeListener('error', reject);
+        this.socket.on('error', (error) => this.emit('error', error));
         this._subscribeAll();
         this.watchdog = setInterval(() => this._checkConnection(), this.resubscribeMs);
         resolve();
@@ -51,10 +60,24 @@ class XPlaneUDP extends EventEmitter {
     });
   }
 
+  // Tells X-Plane to stop streaming (RREF with frequency 0), then closes the
+  // socket. After this X-Plane sends nothing to the bridge.
   stop() {
     clearInterval(this.watchdog);
-    this._unsubscribeAll();
-    this.socket.close();
+    this.watchdog = null;
+
+    const socket = this.socket;
+    if (!socket) {
+      return Promise.resolve();
+    }
+    this.socket = null;
+
+    return Promise.all(
+      this.datarefs.map((dataref, index) => this._sendSubscribe(dataref.path, index, 0, socket))
+    ).then(() => {
+      socket.close();
+      this.connected = false;
+    });
   }
 
   _checkConnection() {
@@ -75,23 +98,20 @@ class XPlaneUDP extends EventEmitter {
     });
   }
 
-  _unsubscribeAll() {
-    this.datarefs.forEach((dataref, index) => {
-      this._sendSubscribe(dataref.path, index, 0);
-    });
-  }
-
-  _sendSubscribe(datarefPath, index, freq) {
+  _sendSubscribe(datarefPath, index, freq, socket = this.socket) {
     const packet = Buffer.alloc(PACKET_LENGTH);
     packet.write(RREF_HEADER, 0, 'ascii');
     packet.writeInt32LE(freq, 5);
     packet.writeInt32LE(index, 9);
     packet.write(datarefPath, 13, 'ascii');
 
-    this.socket.send(packet, this.xplanePort, this.xplaneHost, (error) => {
-      if (error) {
-        this.emit('error', error);
-      }
+    return new Promise((resolve) => {
+      socket.send(packet, this.xplanePort, this.xplaneHost, (error) => {
+        if (error) {
+          this.emit('error', error);
+        }
+        resolve();
+      });
     });
   }
 

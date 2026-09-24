@@ -1,82 +1,116 @@
 'use strict';
 
+/*
+ * Telemetry bridge between data sources (X-Plane, later the Levil BOM) and
+ * Open MCT.
+ *
+ * The bridge starts IDLE: it opens its HTTP/WebSocket port for Open MCT but
+ * talks to no data source. Open MCT's "Source" dropdown picks one, and the
+ * bridge runs exactly one source at a time. Choosing a new source stops the
+ * old one first; choosing "Off" stops everything.
+ *
+ * WebSocket messages (ws://localhost:8081/realtime):
+ *   Open MCT -> bridge   { type: 'select', source: 'xplane' }   (or source: null for Off)
+ *   bridge -> Open MCT   { type: 'sources', active: 'xplane' | null, available: [{ id, name }] }
+ *                        { type: 'status', source, paused }
+ *                        { source, key, value, timestamp }       (a telemetry sample)
+ *
+ * HTTP:  GET /history/<source>/<key>  -> recent samples, for plots opened mid-flight
+ *
+ * Optional: set BRIDGE_SOURCE=xplane to start with a source already selected.
+ */
+
 const http = require('http');
 const { WebSocketServer } = require('ws');
-const XPlaneUDP = require('./xplane-udp.js');
-const datarefs = require('./datarefs.js');
+const sourceRegistry = require('./sources');
 
 const PORT = process.env.XPLANE_BRIDGE_PORT || 8081;
 const HISTORY_LIMIT = 500; // samples kept per measurement, for the /history endpoint
 
-const datarefByKey = new Map(datarefs.map((d) => [d.key, d]));
-const history = new Map(datarefs.filter((d) => !d.internal).map((d) => [d.key, []]));
-
-// Tracks X-Plane's pause state (from the internal 'paused' dataref). While
-// paused, X-Plane keeps sending the same frozen values; we drop them so the
-// plots show a gap instead of a flat line.
-let simPaused = false;
 const wsClients = new Set();
+const history = new Map(); // "<source>.<key>" -> array of samples
 
-function toDatum(sample) {
-  const dataref = datarefByKey.get(sample.key);
-  const value = dataref.convert ? dataref.convert(sample.rawValue) : sample.rawValue;
-  return { key: sample.key, value, timestamp: sample.timestamp };
+let active = null; // { id, source } of the running source, or null when idle
+let switching = Promise.resolve(); // serializes select requests so two can't overlap
+
+function log(message) {
+  console.log(`[xplane-bridge] ${message}`);
 }
 
-const xplane = new XPlaneUDP({ datarefs, frequencyHz: 10 });
-
-xplane.on('data', (sample) => {
-  if (sample.key === 'paused') {
-    const nowPaused = sample.rawValue >= 0.5;
-    if (nowPaused !== simPaused) {
-      simPaused = nowPaused;
-      console.log(simPaused ? '[xplane-bridge] X-Plane paused, holding data' : '[xplane-bridge] X-Plane resumed');
-      broadcast(statusMessage());
+function broadcast(payload) {
+  const text = JSON.stringify(payload);
+  wsClients.forEach((client) => {
+    if (client.readyState === client.OPEN) {
+      client.send(text);
     }
-    return;
+  });
+}
+
+function sourcesMessage() {
+  return {
+    type: 'sources',
+    active: active ? active.id : null,
+    available: Object.entries(sourceRegistry).map(([id, entry]) => ({ id, name: entry.name }))
+  };
+}
+
+function record(sourceId, sample) {
+  const datum = { source: sourceId, key: sample.key, value: sample.value, timestamp: sample.timestamp };
+  const historyKey = `${sourceId}.${sample.key}`;
+
+  if (!history.has(historyKey)) {
+    history.set(historyKey, []);
   }
-
-  if (simPaused) {
-    return;
-  }
-
-  const datum = toDatum(sample);
-
-  const buffer = history.get(datum.key);
+  const buffer = history.get(historyKey);
   buffer.push(datum);
   if (buffer.length > HISTORY_LIMIT) {
     buffer.shift();
   }
 
-  broadcast(JSON.stringify(datum));
-});
-
-// Status messages look like {type: 'status', paused: true}. They carry no
-// telemetry `key`, so the Open MCT realtime provider handles them separately
-// (it drives the "X-Plane paused" indicator in the top bar).
-function statusMessage() {
-  return JSON.stringify({ type: 'status', paused: simPaused });
+  broadcast(datum);
 }
 
-function broadcast(payload) {
-  wsClients.forEach((client) => {
-    if (client.readyState === client.OPEN) {
-      client.send(payload);
+// Stop whatever is running, then start `sourceId` (or stay idle if null).
+function selectSource(sourceId) {
+  switching = switching.then(async () => {
+    const wanted = sourceId && sourceRegistry[sourceId] ? sourceId : null;
+    if ((active ? active.id : null) === wanted) {
+      broadcast(sourcesMessage());
+      return;
     }
+
+    if (active) {
+      const old = active;
+      active = null;
+      await old.source.stop();
+      log(`stopped ${sourceRegistry[old.id].name}`);
+    }
+
+    if (wanted) {
+      const entry = sourceRegistry[wanted];
+      const source = entry.create({
+        onData: (sample) => record(wanted, sample),
+        onStatus: (status) => broadcast({ type: 'status', source: wanted, ...status }),
+        log: (message) => log(`${entry.name}: ${message}`)
+      });
+
+      try {
+        await source.start();
+        active = { id: wanted, source };
+        log(`source selected: ${entry.name}`);
+      } catch (error) {
+        log(`could not start ${entry.name}: ${error.message}`);
+        await source.stop();
+      }
+    } else {
+      log('source selected: Off (idle)');
+    }
+
+    broadcast(sourcesMessage());
   });
+
+  return switching;
 }
-
-xplane.on('connected', () => {
-  console.log('[xplane-bridge] receiving data from X-Plane');
-});
-
-xplane.on('disconnected', () => {
-  console.log('[xplane-bridge] X-Plane went quiet, re-subscribing every few seconds...');
-});
-
-xplane.on('error', (error) => {
-  console.error('[xplane-udp]', error.message);
-});
 
 const server = http.createServer((request, response) => {
   // CORS: Open MCT (served by webpack-dev-server, a different port) fetches
@@ -84,10 +118,10 @@ const server = http.createServer((request, response) => {
   response.setHeader('Access-Control-Allow-Origin', '*');
 
   const url = new URL(request.url, `http://${request.headers.host}`);
-  const match = url.pathname.match(/^\/history\/([\w.-]+)$/);
+  const match = url.pathname.match(/^\/history\/([\w-]+)\/([\w.-]+)$/);
 
   if (match) {
-    const buffer = history.get(match[1]) || [];
+    const buffer = history.get(`${match[1]}.${match[2]}`) || [];
     response.setHeader('Content-Type', 'application/json');
     response.end(JSON.stringify(buffer));
     return;
@@ -100,26 +134,35 @@ const server = http.createServer((request, response) => {
 const wss = new WebSocketServer({ server, path: '/realtime' });
 wss.on('connection', (socket) => {
   wsClients.add(socket);
-  socket.send(statusMessage()); // tell a newly opened Open MCT the current pause state
+  socket.send(JSON.stringify(sourcesMessage()));
+
+  socket.on('message', (raw) => {
+    let message;
+    try {
+      message = JSON.parse(raw.toString());
+    } catch (error) {
+      return;
+    }
+
+    if (message.type === 'select') {
+      selectSource(message.source || null);
+    }
+  });
+
   socket.on('close', () => wsClients.delete(socket));
 });
 
-xplane
-  .start()
-  .then(() => {
-    server.listen(PORT, () => {
-      console.log(`[xplane-bridge] listening on http://localhost:${PORT}`);
-      console.log(`[xplane-bridge] realtime WebSocket at ws://localhost:${PORT}/realtime`);
-      console.log(`[xplane-bridge] requesting ${datarefs.length} datarefs from X-Plane at ${xplane.xplaneHost}:${xplane.xplanePort}, waiting for data...`);
-    });
-  })
-  .catch((error) => {
-    console.error('[xplane-bridge] failed to start UDP listener:', error.message);
-    process.exit(1);
-  });
+server.listen(PORT, () => {
+  log(`listening on http://localhost:${PORT} (realtime WebSocket at ws://localhost:${PORT}/realtime)`);
+  log(`idle - pick a source from the Source dropdown in Open MCT (available: ${Object.keys(sourceRegistry).join(', ')})`);
+
+  if (process.env.BRIDGE_SOURCE) {
+    selectSource(process.env.BRIDGE_SOURCE);
+  }
+});
 
 process.on('SIGINT', () => {
-  console.log('\n[xplane-bridge] shutting down...');
-  xplane.stop();
-  server.close(() => process.exit(0));
+  log('shutting down...');
+  selectSource(null).then(() => server.close(() => process.exit(0)));
+  setTimeout(() => process.exit(0), 1000); // don't hang if a client keeps the server open
 });

@@ -16,6 +16,7 @@
   ],
   "devDependencies": {
     "@babel/eslint-parser": "7.23.3",
+    "concurrently": "^9.0.0",
     "@braintree/sanitize-url": "7.1.1",
     "@types/d3-axis": "3.0.6",
     "@types/d3-scale": "4.0.8",
@@ -99,7 +100,9 @@
   "scripts": {
     "clean": "rm -rf ./dist ./node_modules ./coverage ./html-test-results ./e2e/test-results ./.nyc_output ./e2e/.nyc_output",
     "build": "npm run build:prod && npx tsc",
-    "start": "npx webpack serve --config ./.webpack/webpack.dev.mjs",
+    "start": "concurrently -n openmct,xplane-bridge -c blue,green \"npm run start:openmct\" \"npm run start:xplane-bridge\"",
+    "start:openmct": "npx webpack serve --config ./.webpack/webpack.dev.mjs",
+    "start:xplane-bridge": "node xplane-bridge/bridge-server.js",
     "start:prod": "npx webpack serve --config ./.webpack/webpack.prod.mjs",
     "start:coverage": "npx webpack serve --config ./.webpack/webpack.coverage.mjs",
     "lint:js": "eslint \"example/**/*.js\" \"src/**/*.js\" \"e2e/**/*.js\" \"openmct.js\" --max-warnings=0",
