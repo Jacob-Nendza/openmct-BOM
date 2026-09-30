@@ -6,6 +6,7 @@
  *   historicalTelemetry.js - recent samples from the bridge (/history/bom/<key>)
  *   realtimeTelemetry.js   - live samples over the bridge WebSocket
  *   dashboardView.js       - the plot dashboard shown for the folder
+ *   ../rawData/            - the folder's "Raw Data" table + export
  *
  * Data only flows when "Levil BOM" is picked in the Source dropdown. The UDP
  * listening and GDL90 decoding happen in the bridge (xplane-bridge/sources/bom.js).
@@ -13,9 +14,10 @@
  */
 
 import BOMDashboardViewProvider from './dashboardView.js';
-import BOMDictionaryPlugin from './dictionary.js';
+import BOMDictionaryPlugin, { measurements } from './dictionary.js';
 import BOMHistoricalTelemetryPlugin from './historicalTelemetry.js';
 import BOMRealtimeTelemetryPlugin from './realtimeTelemetry.js';
+import { installRawData } from '../rawData/plugin.js';
 
 export default function BOMDataPlugin() {
   return function install(openmct) {
@@ -25,5 +27,8 @@ export default function BOMDataPlugin() {
 
     // Clicking the "BOM Data" folder opens the plot dashboard.
     openmct.objectViews.addProvider(BOMDashboardViewProvider(openmct));
+
+    // "Raw Data" in the folder: every sample since Open MCT loaded, exportable.
+    installRawData(openmct, 'bom', measurements);
   };
 }

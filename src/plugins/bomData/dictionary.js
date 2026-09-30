@@ -9,6 +9,8 @@
  * decoding. This file only describes the telemetry to Open MCT.
  */
 
+import { RAW_DATA_KEY, rawDataObject } from '../rawData/plugin.js';
+
 export const NAMESPACE = 'bom.taxonomy';
 export const BOM_FOLDER_KEY = 'bomData';
 
@@ -81,6 +83,12 @@ export default function BOMDictionaryPlugin() {
           return Promise.resolve(getBOMFolder(identifier));
         }
 
+        if (identifier.key === RAW_DATA_KEY) {
+          return Promise.resolve(
+            rawDataObject(identifier, 'bom', `${NAMESPACE}:${BOM_FOLDER_KEY}`)
+          );
+        }
+
         const measurement = measurements.find((m) => m.key === identifier.key);
         if (measurement) {
           return Promise.resolve(getMeasurementObject(identifier, measurement));
@@ -98,12 +106,14 @@ export default function BOMDictionaryPlugin() {
         );
       },
       load: function () {
-        return Promise.resolve(
-          measurements.map((m) => ({
+        // "Raw Data" first, then one object per measurement.
+        return Promise.resolve([
+          { namespace: NAMESPACE, key: RAW_DATA_KEY },
+          ...measurements.map((m) => ({
             namespace: NAMESPACE,
             key: m.key
           }))
-        );
+        ]);
       }
     });
 
