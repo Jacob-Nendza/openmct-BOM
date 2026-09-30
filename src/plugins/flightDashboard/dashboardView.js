@@ -17,14 +17,23 @@
  *   plot    - Open MCT's own plot view (zoom, pan, hover values, legend all
  *             work). Plots scrolled out of sight pause drawing until visible.
  *   strip   - strip chart: fixed -90..+90 degree scale across, time running
- *             vertically. New data enters at the bottom and scrolls up at the
+ *             vertically. New data enters at the top and scrolls down at the
  *             same pace as the readout rows (one row = one second), with the
- *             same empty bottom row. The scale never changes.
- *   readout - column of recent values, newest at the bottom, one new row every
- *             READOUT_INTERVAL_MS. The bottom row is always left empty, so the
- *             row just above it is the most recent value.
+ *             same empty top row. The degree scale is labeled along the bottom
+ *             and never changes.
+ *   readout - column of recent values, newest at the top, one new row every
+ *             READOUT_INTERVAL_MS. The top row is always left empty, so the
+ *             row just below it is the most recent value.
  *
- * Every cell's title links to Open MCT's full-size plot of that measurement.
+ * Clear Data empties strips and readouts, like it does Open MCT's plots.
+ *
+ * Plots show a moving 2-minute window (see ./timeWindows.js); a plot entry
+ * can set windowSeconds to use a different length. Clicking a plot's title
+ * opens it expanded, showing the full duration of the data.
+ *
+ * Every cell's title opens that measurement expanded: plots open the
+ * full-duration plot, strips open the horizontal strip chart of the whole
+ * session (./horizontalStripView.js).
  * Strips and readouts freeze while no data is arriving (source Off, or sim
  * paused). The folder's usual Grid and List views stay in the view switcher.
  *
@@ -35,12 +44,14 @@
  *     namespace,                // the platform's object namespace
  *     folderKey,                // the folder that gets this dashboard
  *     measurements,             // from the platform's dictionary.js
- *     layout,                   // [{ key, kind, span }], span = grid columns (of 8)
+ *     layout,                   // [{ key, kind, span, windowSeconds? }], span = grid columns (of 8)
  *     decimals: { altitude: 0 } // optional: readout decimal places by key
  *   })
  */
 
 import { objectPathToUrl } from '../../tools/url.js';
+import { HORIZONTAL_STRIP_VIEW_KEY } from './horizontalStripView.js';
+import { DASHBOARD_WINDOW_S, getTimeWindows } from './timeWindows.js';
 import VisibilityObserver from '../../utils/visibility/VisibilityObserver.js';
 
 const GRID_COLUMNS = 8;
@@ -53,10 +64,10 @@ const READOUT_HISTORY = 300; // rows kept per column (older ones drop off the to
 const STRIP_RANGE_DEG = 90; // strip charts run from -90 to +90
 const STRIP_GRID_DEG = 30; // vertical gridline every 30 degrees
 const STRIP_TRACE_COLOR = '#43b0ff'; // same blue as Open MCT's first plot series
-const STRIP_AXIS_PX = 16; // space at the top for the -90 ... +90 labels
+const STRIP_AXIS_PX = 16; // space at the bottom for the -90 ... +90 labels
 
 // Readout decimal places by measurement key (a platform can override these).
-const DEFAULT_DECIMALS = {
+export const DEFAULT_DECIMALS = {
   altitude: 0,
   pressure_altitude: 0,
   gps_altitude: 0,
@@ -103,6 +114,21 @@ export default function createDashboardViewProvider(openmct, options) {
       const cleanups = [];
       let destroyed = false;
 
+      // Clear Data (global, or for this folder / this measurement) applies here.
+      function onClearData(child, callback) {
+        const handler = (target) => {
+          if (
+            !target ||
+            openmct.objects.areIdsEqual(target.identifier, child.identifier) ||
+            openmct.objects.areIdsEqual(target.identifier, domainObject.identifier)
+          ) {
+            callback();
+          }
+        };
+        openmct.objectViews.on('clearData', handler);
+        cleanups.push(() => openmct.objectViews.off('clearData', handler));
+      }
+
       function makeCell(grid, span, titleText, titleHref) {
         const cell = document.createElement('div');
         cell.style.cssText = CELL_STYLE + `grid-column: span ${span};`;
@@ -125,7 +151,7 @@ export default function createDashboardViewProvider(openmct, options) {
         return body;
       }
 
-      function buildPlot(grid, scroller, child, measurement, span) {
+      function buildPlot(grid, scroller, child, measurement, span, windowSeconds) {
         const childPath = [child, ...objectPath];
         const body = makeCell(
           grid,
@@ -149,6 +175,15 @@ export default function createDashboardViewProvider(openmct, options) {
           view.destroy();
           visibility.destroy();
         });
+
+        // Moving 2-minute window (or the layout's windowSeconds) while on the dashboard.
+        cleanups.push(
+          getTimeWindows(openmct).holdDashboardWindow(
+            child,
+            childPath,
+            windowSeconds || DASHBOARD_WINDOW_S
+          )
+        );
       }
 
       function buildStrip(grid, child, measurement, span) {
@@ -157,7 +192,7 @@ export default function createDashboardViewProvider(openmct, options) {
           grid,
           span,
           `${measurement.name} (${measurement.units})`,
-          objectPathToUrl(openmct, childPath, { view: 'plot-single' })
+          objectPathToUrl(openmct, childPath, { view: HORIZONTAL_STRIP_VIEW_KEY })
         );
 
         const canvas = document.createElement('canvas');
@@ -199,10 +234,12 @@ export default function createDashboardViewProvider(openmct, options) {
           const pad = 8;
           const plotLeft = pad;
           const plotRight = width - pad;
-          const plotTop = STRIP_AXIS_PX;
-          // "Now" sits one row above the bottom, leaving the same empty bottom
-          // row as the readout columns.
-          const nowY = height - READOUT_ROW_PX;
+          // Degree labels sit along the bottom, so the rows start at the very
+          // top and line up with the readout columns' rows.
+          const plotBottom = height - STRIP_AXIS_PX;
+          // "Now" sits one row below the top, leaving the same empty top row
+          // as the readout columns.
+          const nowY = READOUT_ROW_PX;
           const xFor = (value) => {
             const clamped = Math.max(-STRIP_RANGE_DEG, Math.min(STRIP_RANGE_DEG, value));
             return (
@@ -211,10 +248,10 @@ export default function createDashboardViewProvider(openmct, options) {
             );
           };
 
-          // Row lines, bottom-aligned like the readout rows.
+          // Row lines, top-aligned like the readout rows.
           ctx.strokeStyle = 'rgba(127,127,127,0.18)';
           ctx.lineWidth = 1;
-          for (let y = height - READOUT_ROW_PX; y > plotTop; y -= READOUT_ROW_PX) {
+          for (let y = 0; y < plotBottom; y += READOUT_ROW_PX) {
             ctx.beginPath();
             ctx.moveTo(plotLeft, Math.round(y) + 0.5);
             ctx.lineTo(plotRight, Math.round(y) + 0.5);
@@ -224,13 +261,13 @@ export default function createDashboardViewProvider(openmct, options) {
           // Degree gridlines and labels (fixed scale).
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'center';
-          ctx.textBaseline = 'top';
+          ctx.textBaseline = 'bottom';
           for (let deg = -STRIP_RANGE_DEG; deg <= STRIP_RANGE_DEG; deg += STRIP_GRID_DEG) {
             const x = Math.round(xFor(deg)) + 0.5;
             ctx.strokeStyle = deg === 0 ? 'rgba(127,127,127,0.7)' : 'rgba(127,127,127,0.28)';
             ctx.beginPath();
-            ctx.moveTo(x, plotTop);
-            ctx.lineTo(x, height);
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, plotBottom);
             ctx.stroke();
             ctx.fillStyle = textColor;
             ctx.globalAlpha = 0.6;
@@ -239,7 +276,7 @@ export default function createDashboardViewProvider(openmct, options) {
             ctx.fillText(
               String(deg),
               deg === -STRIP_RANGE_DEG ? plotLeft : deg === STRIP_RANGE_DEG ? plotRight : x,
-              2
+              height - 2
             );
             ctx.globalAlpha = 1;
           }
@@ -248,14 +285,14 @@ export default function createDashboardViewProvider(openmct, options) {
             return;
           }
 
-          // Time runs upward: pixels per second = one readout row. The newest
+          // Time runs downward: pixels per second = one readout row. The newest
           // sample is "now", so the strip freezes when data stops arriving.
           const newest = samples[samples.length - 1].timestamp;
-          const yFor = (timestamp) => nowY - ((newest - timestamp) / 1000) * READOUT_ROW_PX;
+          const yFor = (timestamp) => nowY + ((newest - timestamp) / 1000) * READOUT_ROW_PX;
 
           ctx.save();
           ctx.beginPath();
-          ctx.rect(0, plotTop, width, height - plotTop);
+          ctx.rect(0, 0, width, plotBottom);
           ctx.clip();
           ctx.strokeStyle = STRIP_TRACE_COLOR;
           ctx.lineWidth = 1.5;
@@ -270,8 +307,8 @@ export default function createDashboardViewProvider(openmct, options) {
             } else {
               ctx.lineTo(x, y);
             }
-            if (y < plotTop) {
-              break; // older samples are off the top
+            if (y > plotBottom) {
+              break; // older samples are off the bottom
             }
           }
           ctx.stroke();
@@ -313,6 +350,10 @@ export default function createDashboardViewProvider(openmct, options) {
 
         const resizeObserver = new ResizeObserver(scheduleDraw);
         resizeObserver.observe(body);
+        onClearData(child, () => {
+          samples.length = 0;
+          scheduleDraw();
+        });
         scheduleDraw();
 
         cleanups.push(() => {
@@ -323,7 +364,7 @@ export default function createDashboardViewProvider(openmct, options) {
 
       function buildReadout(grid, child, measurement, span) {
         const body = makeCell(grid, span, `${measurement.name} (${measurement.units})`);
-        body.style.justifyContent = 'flex-end'; // rows stack up from the bottom
+        body.style.justifyContent = 'flex-start'; // rows stack down from the top
         body.style.overflow = 'hidden';
         body.style.fontVariantNumeric = 'tabular-nums';
 
@@ -354,9 +395,9 @@ export default function createDashboardViewProvider(openmct, options) {
 
         function render() {
           const fits = Math.max(1, Math.floor(body.clientHeight / READOUT_ROW_PX));
-          const shown = rows.slice(-(fits - 1)); // leave room for the empty bottom row
-          const elements = shown.map((sample, i) => makeRow(sample, i === shown.length - 1));
-          elements.push(makeRow(null)); // empty row: everything above is older than "now"
+          const shown = rows.slice(-(fits - 1)).reverse(); // newest first; leave room for the empty top row
+          const elements = shown.map((sample, i) => makeRow(sample, i === 0));
+          elements.unshift(makeRow(null)); // empty row: everything below is older than "now"
           body.replaceChildren(...elements);
         }
 
@@ -400,6 +441,11 @@ export default function createDashboardViewProvider(openmct, options) {
 
         const resizeObserver = new ResizeObserver(render);
         resizeObserver.observe(body);
+        onClearData(child, () => {
+          rows.length = 0;
+          latest = null;
+          render();
+        });
         render();
 
         cleanups.push(() => {
@@ -454,7 +500,7 @@ export default function createDashboardViewProvider(openmct, options) {
             } else if (item.kind === 'strip') {
               buildStrip(grid, child, measurement, item.span);
             } else {
-              buildPlot(grid, scroller, child, measurement, item.span);
+              buildPlot(grid, scroller, child, measurement, item.span, item.windowSeconds);
             }
           });
         },

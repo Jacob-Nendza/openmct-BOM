@@ -13,6 +13,7 @@
  */
 
 import bridgeClient from './bridgeClient.js';
+import dataClock from './dataClock.js';
 
 const STATUS_CLASSES = ['s-status-on', 's-status-off', 's-status-disabled'];
 
@@ -68,6 +69,9 @@ export default function DataSourcePlugin() {
       element,
       priority: openmct.priority.HIGH
     });
+
+    // Time since data flow began, on every chart; resets with Clear Data.
+    dataClock.install(openmct);
 
     bridgeClient.onChange(render);
     bridgeClient.connect();

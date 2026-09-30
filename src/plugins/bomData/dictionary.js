@@ -60,7 +60,7 @@ function getMeasurementObject(identifier, measurement) {
         {
           key: 'utc',
           source: 'timestamp',
-          name: 'Timestamp',
+          name: 'Time',
           format: 'utc',
           hints: { domain: 1 }
         }

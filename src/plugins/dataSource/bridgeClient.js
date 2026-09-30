@@ -12,6 +12,7 @@
  *   bridgeClient.select('xplane')                           // switch source (null = Off)
  *   bridgeClient.onChange(callback)                         // connection / active-source changes
  *   bridgeClient.onStatus(callback)                         // source status, e.g. {source, paused}
+ *   bridgeClient.onSample(callback)                         // EVERY live sample, any source/key
  *   bridgeClient.historyUrl('xplane', 'altitude')           // URL for recent samples
  *
  * Set window.BRIDGE_URL in index.html to point somewhere other than
@@ -23,6 +24,7 @@ const RECONNECT_MS = 2000;
 const listeners = {}; // "<source>.<key>" -> [callback]
 const changeCallbacks = [];
 const statusCallbacks = [];
+const sampleCallbacks = [];
 
 const state = {
   connected: false,
@@ -55,6 +57,7 @@ function handleMessage(event) {
   } else if (message.type === 'status') {
     statusCallbacks.forEach((callback) => callback(message));
   } else if (message.key) {
+    sampleCallbacks.forEach((callback) => callback(message));
     (listeners[`${message.source}.${message.key}`] || []).forEach((callback) => callback(message));
   }
 }
@@ -123,6 +126,10 @@ const bridgeClient = {
 
   onStatus(callback) {
     statusCallbacks.push(callback);
+  },
+
+  onSample(callback) {
+    sampleCallbacks.push(callback);
   },
 
   historyUrl(sourceId, key) {

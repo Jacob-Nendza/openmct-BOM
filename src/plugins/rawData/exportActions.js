@@ -11,6 +11,7 @@
  * readability) and oldest-first, the order analysis tools expect.
  */
 
+import dataClock from '../dataSource/dataClock.js';
 import { getRecorder } from './recorder.js';
 import { RAW_DATA_TYPE } from './rawDataView.js';
 
@@ -25,14 +26,20 @@ const FORMATS = [
     extension: 'csv',
     mimeType: 'text/csv',
     // Opens in Excel, MATLAB (readtable), Python (pandas.read_csv), ...
-    // Columns: timestamp_utc, unix_time_ms, then one per measurement.
+    // Columns: timestamp_utc, unix_time_ms, elapsed_s (seconds since the data
+    // started, blank if no data yet), then one per measurement.
     build(recorder) {
-      const header = ['timestamp_utc', 'unix_time_ms'].concat(
+      const start = dataClock.start;
+      const header = ['timestamp_utc', 'unix_time_ms', 'elapsed_s'].concat(
         recorder.measurements.map((m) => (m.units ? `${m.name} (${m.units})` : m.name))
       );
       const lines = [header.map(csvField).join(',')];
       recorder.rows.forEach((row) => {
-        const fields = [new Date(row.timestamp).toISOString(), String(row.timestamp)];
+        const fields = [
+          new Date(row.timestamp).toISOString(),
+          String(row.timestamp),
+          start === null ? '' : ((row.timestamp - start) / 1000).toFixed(3)
+        ];
         recorder.measurements.forEach((m) => {
           const value = row.values[m.key];
           fields.push(value === undefined ? '' : String(value));

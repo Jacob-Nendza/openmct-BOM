@@ -13,11 +13,13 @@
  * For testing without hardware, run the BOM Emulator (C:\Projects\BOM-Emulator).
  */
 
-import BOMDashboardViewProvider from './dashboardView.js';
+import BOMDashboardViewProvider, { STRIP_KEYS } from './dashboardView.js';
 import BOMDictionaryPlugin, { measurements } from './dictionary.js';
 import BOMHistoricalTelemetryPlugin from './historicalTelemetry.js';
 import BOMRealtimeTelemetryPlugin from './realtimeTelemetry.js';
 import { installRawData } from '../rawData/plugin.js';
+import { registerHorizontalStrips } from '../flightDashboard/horizontalStripView.js';
+import { getTimeWindows } from '../flightDashboard/timeWindows.js';
 
 export default function BOMDataPlugin() {
   return function install(openmct) {
@@ -30,5 +32,13 @@ export default function BOMDataPlugin() {
 
     // "Raw Data" in the folder: every sample since Open MCT loaded, exportable.
     installRawData(openmct, 'bom', measurements);
+
+    // Opened on its own (e.g. clicking a dashboard plot's title), a measurement
+    // plot shows the full duration of the data (../flightDashboard/timeWindows.js).
+    getTimeWindows(openmct).expandToFullDuration('bom.telemetry');
+
+    // Pitch / Roll (the dashboard's strips) open as a horizontal strip chart
+    // of the whole session instead (../flightDashboard/horizontalStripView.js).
+    registerHorizontalStrips(openmct, 'bom.telemetry', 'bom', STRIP_KEYS);
   };
 }

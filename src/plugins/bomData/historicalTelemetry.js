@@ -1,9 +1,11 @@
 /*
- * Historical telemetry provider for BOM data - same as the X-Plane one, but
- * asks the bridge for /history/bom/<key>.
+ * Historical telemetry provider for BOM data. When Open MCT needs data for a
+ * time range (a plot opening, the window moving, an expanded plot showing the
+ * whole flight), request() answers from the bridge's buffer plus everything
+ * recorded since Open MCT loaded - see ../rawData/history.js.
  */
 
-import bridgeClient from '../dataSource/bridgeClient.js';
+import requestHistory from '../rawData/history.js';
 
 export default function BOMHistoricalTelemetryPlugin() {
   return function install(openmct) {
@@ -11,20 +13,9 @@ export default function BOMHistoricalTelemetryPlugin() {
       supportsRequest: function (domainObject) {
         return domainObject.type === 'bom.telemetry';
       },
-      request: function (domainObject) {
-        const key = domainObject.identifier.key;
-
-        return fetch(bridgeClient.historyUrl('bom', key))
-          .then((response) => {
-            if (!response.ok) {
-              throw new Error(`bridge returned ${response.status}`);
-            }
-            return response.json();
-          })
-          .catch((error) => {
-            console.error(`[bom] historical request failed for "${key}":`, error.message);
-            return [];
-          });
+      // Bridge buffer + everything recorded since Open MCT loaded (../rawData/history.js).
+      request: function (domainObject, options) {
+        return requestHistory('bom', domainObject.identifier.key, options);
       }
     });
   };

@@ -20,6 +20,7 @@
  */
 
 import bridgeClient from '../dataSource/bridgeClient.js';
+import dataClock from '../dataSource/dataClock.js';
 
 const MAX_ROWS = 2000000; // safety cap (~several hours at BOM rates); oldest rows drop first
 
@@ -88,6 +89,7 @@ function createRecorder(sourceId, measurements) {
       }
     }
     row.values[key] = value;
+    dataClock.noteSample(timestamp);
     notify();
   }
 

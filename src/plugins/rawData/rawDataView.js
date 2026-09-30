@@ -8,8 +8,13 @@
  * data; scroll down to read older rows and the view holds still (new rows
  * are added above without pushing what you're reading). Scroll back to the
  * top to follow live again.
+ *
+ * The "Elapsed" column is time since data flow began (from
+ * ../dataSource/dataClock.js). Clear Data resets zero but does NOT erase this
+ * recording, so rows from before the clear show as negative.
  */
 
+import dataClock, { formatElapsed } from '../dataSource/dataClock.js';
 import { DEFAULT_DECIMALS } from '../flightDashboard/dashboardView.js';
 import { getRecorder } from './recorder.js';
 
@@ -17,6 +22,7 @@ export const RAW_DATA_TYPE = 'flight.rawData';
 
 const ROW_PX = 22;
 const TIME_COL_PX = 110;
+const ELAPSED_COL_PX = 110;
 const VALUE_COL_PX = 110;
 const OVERSCAN_ROWS = 10; // extra rows drawn above/below the visible area
 
@@ -48,8 +54,8 @@ export default function RawDataViewProvider() {
     view(domainObject) {
       const recorder = getRecorder(domainObject.rawData.source);
       const measurements = recorder.measurements;
-      const gridColumns = `${TIME_COL_PX}px repeat(${measurements.length}, ${VALUE_COL_PX}px)`;
-      const totalWidth = TIME_COL_PX + measurements.length * VALUE_COL_PX;
+      const gridColumns = `${TIME_COL_PX}px ${ELAPSED_COL_PX}px repeat(${measurements.length}, ${VALUE_COL_PX}px)`;
+      const totalWidth = TIME_COL_PX + ELAPSED_COL_PX + measurements.length * VALUE_COL_PX;
 
       let scroller;
       let header;
@@ -58,6 +64,7 @@ export default function RawDataViewProvider() {
       let rendered = { first: -1, last: -1, count: -1 };
       let lastCount = 0;
       let unsubscribe = () => {};
+      let stopClock = () => {};
       let resizeObserver;
 
       function cellStyle(align) {
@@ -74,12 +81,16 @@ export default function RawDataViewProvider() {
           `width:${totalWidth}px; font-weight:bold; line-height:1.3;` +
           'border-bottom:1px solid rgba(127,127,127,0.5);';
 
-        const cells = [['Time (UTC)', '']].concat(
+        const cells = [
+          ['Time (UTC)', ''],
+          ['Elapsed', '(since data start)']
+        ].concat(
           measurements.map((m) => [m.name, m.units ? `(${m.units})` : ''])
         );
         cells.forEach(([name, units], i) => {
           const cell = document.createElement('div');
-          cell.style.cssText = cellStyle(i === 0 ? 'left' : 'right') + 'padding:4px 6px; white-space:normal;';
+          cell.style.cssText =
+            cellStyle(i < 2 ? 'left' : 'right') + 'padding:4px 6px; white-space:normal;';
           cell.title = `${name} ${units}`.trim();
           cell.textContent = name;
           if (units) {
@@ -103,6 +114,13 @@ export default function RawDataViewProvider() {
         time.style.cssText = cellStyle('left') + 'opacity:0.6;';
         time.textContent = formatTime(row.timestamp);
         el.append(time);
+
+        const elapsed = document.createElement('div');
+        elapsed.style.cssText = cellStyle('left') + 'opacity:0.8;';
+        if (dataClock.start !== null) {
+          elapsed.textContent = formatElapsed(row.timestamp - dataClock.start, true);
+        }
+        el.append(elapsed);
 
         measurements.forEach((m) => {
           const cell = document.createElement('div');
@@ -180,11 +198,13 @@ export default function RawDataViewProvider() {
           resizeObserver = new ResizeObserver(() => render(false));
           resizeObserver.observe(scroller);
           unsubscribe = recorder.onChange(() => render(true));
+          stopClock = dataClock.onChange(() => render(true)); // zero set or reset
           render(true);
         },
 
         destroy() {
           unsubscribe();
+          stopClock();
           if (resizeObserver) {
             resizeObserver.disconnect();
           }

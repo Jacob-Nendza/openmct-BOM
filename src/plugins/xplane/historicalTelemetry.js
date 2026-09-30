@@ -1,15 +1,11 @@
 /*
- * Historical telemetry provider for X-Plane data.
- *
- * When Open MCT needs data for a time range (e.g. drawing a plot on load,
- * or panning the time conductor), it calls `request()`. This asks the
- * bridge server for whatever samples it currently has buffered for that
- * measurement.
- *
- * The bridge address comes from ../dataSource/bridgeClient.js.
+ * Historical telemetry provider for X-Plane data. When Open MCT needs data for a
+ * time range (a plot opening, the window moving, an expanded plot showing the
+ * whole flight), request() answers from the bridge's buffer plus everything
+ * recorded since Open MCT loaded - see ../rawData/history.js.
  */
 
-import bridgeClient from '../dataSource/bridgeClient.js';
+import requestHistory from '../rawData/history.js';
 
 export default function XPlaneHistoricalTelemetryPlugin() {
   return function install(openmct) {
@@ -17,20 +13,9 @@ export default function XPlaneHistoricalTelemetryPlugin() {
       supportsRequest: function (domainObject) {
         return domainObject.type === 'xplane.telemetry';
       },
-      request: function (domainObject) {
-        const key = domainObject.identifier.key;
-
-        return fetch(bridgeClient.historyUrl('xplane', key))
-          .then((response) => {
-            if (!response.ok) {
-              throw new Error(`bridge returned ${response.status}`);
-            }
-            return response.json();
-          })
-          .catch((error) => {
-            console.error(`[xplane] historical request failed for "${key}":`, error.message);
-            return [];
-          });
+      // Bridge buffer + everything recorded since Open MCT loaded (../rawData/history.js).
+      request: function (domainObject, options) {
+        return requestHistory('xplane', domainObject.identifier.key, options);
       }
     });
   };

@@ -5,6 +5,8 @@
  *
  * LAYOUT is the dashboard cell by cell, left-to-right then top-to-bottom, on
  * an 8-column grid. kind: 'plot' | 'strip' | 'readout'; span: columns wide.
+ * Plots show the last 2 minutes; add windowSeconds: N to a plot entry to use a
+ * different length for that plot. Expanded (click the title) = full duration.
  *
  * Track, Yaw Rate and GPS Vertical Speed aren't on the dashboard; they're in
  * the folder's List/Grid views (view switcher) and can be added to LAYOUT.
@@ -32,6 +34,11 @@ const LAYOUT = [
   { key: 'slip', kind: 'plot', span: 4 },
   { key: 'latitude', kind: 'plot', span: 4 },
   { key: 'longitude', kind: 'plot', span: 4 }
+];
+
+// Measurements drawn as strips here; clicking them opens the horizontal strip chart.
+export const STRIP_KEYS = [
+  ...new Set(LAYOUT.filter((item) => item.kind === 'strip').map((item) => item.key))
 ];
 
 export default function BOMDashboardViewProvider(openmct) {

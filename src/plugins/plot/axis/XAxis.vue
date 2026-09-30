@@ -22,10 +22,13 @@
 
 <template>
   <div v-if="loaded" class="gl-plot-axis-area gl-plot-x has-local-controls">
-    <MctTicks :axis-type="'xAxis'" :position="'left'" :is-utc="isUtc" />
+    <!-- UTC ticks moved to the top of the plot (MctPlot.vue); the bottom axis
+         shows time since data flow began (dataSource/dataClock.js). -->
+    <ElapsedAxis v-if="isUtc" :height="16" />
+    <MctTicks v-else :axis-type="'xAxis'" :position="'left'" :is-utc="isUtc" />
 
     <div class="gl-plot-label gl-plot-x-label" :class="{ 'icon-gear': isEnabledXKeyToggle() }">
-      {{ xAxisLabel }}
+      {{ displayLabel }}
     </div>
 
     <select
@@ -45,10 +48,12 @@
 import configStore from '../configuration/ConfigStore.js';
 import eventHelpers from '../lib/eventHelpers.js';
 import MctTicks from '../MctTicks.vue';
+import ElapsedAxis from './ElapsedAxis.vue';
 
 export default {
   components: {
-    MctTicks
+    MctTicks,
+    ElapsedAxis
   },
   inject: ['openmct', 'domainObject'],
   props: {
@@ -68,6 +73,11 @@ export default {
       xAxisLabel: '',
       isUtc: this.openmct.time.getTimeSystem().isUTCBased
     };
+  },
+  computed: {
+    displayLabel() {
+      return this.isUtc ? 'Time since data start' : this.xAxisLabel;
+    }
   },
   mounted() {
     eventHelpers.extend(this);

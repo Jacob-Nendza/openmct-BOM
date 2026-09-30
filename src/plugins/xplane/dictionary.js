@@ -12,6 +12,8 @@
  * telemetry looks like to Open MCT; it never touches the network itself.
  */
 
+import { RAW_DATA_KEY, rawDataObject } from '../rawData/plugin.js';
+
 export const NAMESPACE = 'xplane.taxonomy';
 export const AIRCRAFT_FOLDER_KEY = 'xplaneAircraft';
 
@@ -54,7 +56,7 @@ function getMeasurementObject(identifier, measurement) {
         {
           key: 'utc',
           source: 'timestamp',
-          name: 'Timestamp',
+          name: 'Time',
           format: 'utc',
           hints: { domain: 1 }
         }
@@ -77,6 +79,12 @@ export default function XPlaneDictionaryPlugin() {
           return Promise.resolve(getAircraftFolder(identifier));
         }
 
+        if (identifier.key === RAW_DATA_KEY) {
+          return Promise.resolve(
+            rawDataObject(identifier, 'xplane', `${NAMESPACE}:${AIRCRAFT_FOLDER_KEY}`)
+          );
+        }
+
         const measurement = measurements.find((m) => m.key === identifier.key);
         if (measurement) {
           return Promise.resolve(getMeasurementObject(identifier, measurement));
@@ -94,12 +102,14 @@ export default function XPlaneDictionaryPlugin() {
         );
       },
       load: function () {
-        return Promise.resolve(
-          measurements.map((m) => ({
+        // "Raw Data" first, then one object per measurement.
+        return Promise.resolve([
+          { namespace: NAMESPACE, key: RAW_DATA_KEY },
+          ...measurements.map((m) => ({
             namespace: NAMESPACE,
             key: m.key
           }))
-        );
+        ]);
       }
     });
 

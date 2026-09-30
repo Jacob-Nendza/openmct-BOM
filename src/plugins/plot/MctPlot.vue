@@ -35,11 +35,28 @@
           :key="`yAxis-${yAxis.id}-${index}`"
           :position="yAxis.id > 2 ? 'right' : 'left'"
           :class="{ 'plot-yaxis-right': yAxis.id > 2 }"
+          :style="showTopUtcAxis ? { top: `${topAxisHeight}px` } : {}"
           @y-key-changed="setYAxisKey"
           @toggle-axis-visibility="toggleSeriesForYAxis"
         />
       </div>
       <div class="gl-plot-wrapper-display-area-and-x-axis" :style="xAxisStyle">
+        <!-- UTC time axis across the top (time since data start is on the bottom axis) -->
+        <div
+          v-if="showTopUtcAxis"
+          class="c-plot-utc-axis"
+          title="Time (UTC)"
+          :style="{
+            position: 'absolute',
+            top: `-${topAxisHeight}px`,
+            left: 0,
+            right: 0,
+            height: `${topAxisHeight}px`,
+            overflow: 'hidden'
+          }"
+        >
+          <MctTicks :axis-type="'xAxis'" :position="'left'" :is-utc="isUtc" />
+        </div>
         <div class="gl-plot-display-area has-local-controls has-cursor-guides">
           <div class="l-state-indicators">
             <span
@@ -297,10 +314,14 @@ export default {
       hiddenYAxisIds: [],
       yAxisListWithRange: [],
       config: {},
-      isUtc: this.openmct.time.getTimeSystem().isUTCBased
+      isUtc: this.openmct.time.getTimeSystem().isUTCBased,
+      topAxisHeight: 20
     };
   },
   computed: {
+    showTopUtcAxis() {
+      return this.seriesModels.length > 0 && !this.options.compact && this.isUtc;
+    },
     xAxisStyle() {
       let leftOffset = 0;
       if (this.alignmentData.leftWidth) {
@@ -309,6 +330,11 @@ export default {
       let style = {
         left: `${this.alignmentData.leftWidth + leftOffset}px`
       };
+
+      // Make room above the plot for the UTC time axis.
+      if (this.showTopUtcAxis) {
+        style.top = `${this.topAxisHeight}px`;
+      }
 
       if (this.alignmentData.rightWidth) {
         style.right = `${this.alignmentData.rightWidth + AXES_PADDING}px`;
