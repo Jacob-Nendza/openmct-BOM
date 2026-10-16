@@ -11,7 +11,7 @@
  *   3. returning rawDataObject(...) from its object provider for RAW_DATA_KEY
  */
 
-import createExportActions from './exportActions.js';
+import createExportActions, { addExportFolder } from './exportActions.js';
 import { getRecorder } from './recorder.js';
 import RawDataViewProvider, { RAW_DATA_TYPE } from './rawDataView.js';
 
@@ -31,8 +31,14 @@ export function rawDataObject(identifier, sourceId, location) {
   };
 }
 
-export function installRawData(openmct, sourceId, measurements) {
+// folderIdentifier (optional): the platform's main folder, e.g. "BOM Data".
+// When given, that folder's ⋯ menu also gets "Export Raw Data as ...".
+export function installRawData(openmct, sourceId, measurements, folderIdentifier) {
   getRecorder(sourceId, measurements); // start recording now, not when the view opens
+
+  if (folderIdentifier) {
+    addExportFolder(folderIdentifier, sourceId);
+  }
 
   if (installedIn.has(openmct)) {
     return;

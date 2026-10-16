@@ -9,13 +9,16 @@
  *
  * Data from before the last Clear Data is left out, so cleared plots stay
  * cleared.
+ *
+ * fromBridge = false skips the bridge (for values worked out in Open MCT,
+ * like KCAS, which the bridge never has).
  */
 
 import bridgeClient from '../dataSource/bridgeClient.js';
 import dataClock from '../dataSource/dataClock.js';
 import { getRecorder } from './recorder.js';
 
-export default async function requestHistory(sourceId, key, options = {}) {
+export default async function requestHistory(sourceId, key, options = {}, fromBridge = true) {
   const from = Math.max(
     typeof options.start === 'number' ? options.start : -Infinity,
     dataClock.lastClearAt === null ? -Infinity : dataClock.lastClearAt + 1
@@ -23,17 +26,19 @@ export default async function requestHistory(sourceId, key, options = {}) {
   const to = typeof options.end === 'number' ? options.end : Infinity;
   const byTime = new Map(); // timestamp -> sample
 
-  try {
-    const response = await fetch(bridgeClient.historyUrl(sourceId, key));
-    if (!response.ok) {
-      throw new Error(`bridge returned ${response.status}`);
+  if (fromBridge) {
+    try {
+      const response = await fetch(bridgeClient.historyUrl(sourceId, key));
+      if (!response.ok) {
+        throw new Error(`bridge returned ${response.status}`);
+      }
+      const samples = await response.json();
+      if (Array.isArray(samples)) {
+        samples.forEach((sample) => byTime.set(sample.timestamp, sample));
+      }
+    } catch (error) {
+      console.error(`[${sourceId}] historical request failed for "${key}":`, error.message);
     }
-    const samples = await response.json();
-    if (Array.isArray(samples)) {
-      samples.forEach((sample) => byTime.set(sample.timestamp, sample));
-    }
-  } catch (error) {
-    console.error(`[${sourceId}] historical request failed for "${key}":`, error.message);
   }
 
   // Recorder rows are oldest-first; walk back from the newest until out of range.

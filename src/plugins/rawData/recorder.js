@@ -15,6 +15,10 @@
  * airspeed, ... and an Ownship row has latitude, longitude, ...). A value
  * that wasn't in that packet is left blank - nothing is filled in or guessed.
  *
+ * Worked-out measurements (a `derive: { from, compute }` in the platform's
+ * dictionary, e.g. the BOM's KCAS from indicated airspeed) are recorded in the
+ * same row as the value they come from, computed when the sample arrives.
+ *
  * Everything lives in browser memory: refreshing the page starts a new
  * recording. Export before you refresh.
  */
@@ -93,13 +97,27 @@ function createRecorder(sourceId, measurements) {
     notify();
   }
 
+  // Bridge measurements, and the worked-out ones that come from each.
+  const direct = measurements.filter((m) => !m.derive);
+  const derivedFrom = (key) => measurements.filter((m) => m.derive && m.derive.from === key);
+
+  // Record one bridge sample, plus anything worked out from it.
+  function addSample(key, value, timestamp) {
+    add(key, value, timestamp);
+    derivedFrom(key).forEach((m) => {
+      if (Number.isFinite(Number(value))) {
+        add(m.key, m.derive.compute(Number(value)), timestamp);
+      }
+    });
+  }
+
   function loadBridgeHistory() {
-    measurements.forEach((measurement) => {
+    direct.forEach((measurement) => {
       fetch(bridgeClient.historyUrl(sourceId, measurement.key))
         .then((response) => (response.ok ? response.json() : []))
         .then((samples) => {
           if (Array.isArray(samples)) {
-            samples.forEach((s) => add(measurement.key, s.value, s.timestamp));
+            samples.forEach((s) => addSample(measurement.key, s.value, s.timestamp));
           }
         })
         .catch(() => {}); // bridge not running yet - live data will still be recorded
@@ -107,9 +125,9 @@ function createRecorder(sourceId, measurements) {
   }
 
   // Record live samples for every measurement, from now on.
-  measurements.forEach((measurement) => {
+  direct.forEach((measurement) => {
     bridgeClient.subscribe(sourceId, measurement.key, (datum) =>
-      add(measurement.key, datum.value, datum.timestamp)
+      addSample(measurement.key, datum.value, datum.timestamp)
     );
   });
 

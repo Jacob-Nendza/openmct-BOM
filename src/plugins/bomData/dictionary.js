@@ -10,23 +10,43 @@
  */
 
 import { RAW_DATA_KEY, rawDataObject } from '../rawData/plugin.js';
+import { bomTestPointSettings } from './testPoint.js';
 
 export const NAMESPACE = 'bom.taxonomy';
 export const BOM_FOLDER_KEY = 'bomData';
 
 // Keep these `key` values in sync with FIELDS in xplane-bridge/sources/bom.js.
 // `source` = which GDL90 message the value comes from (shown in the description).
+//
+// `derive` = not sent by the BOM; worked out in Open MCT from another value.
+// The recorder, live feed and plots all treat it like any other measurement,
+// so it is recorded in Raw Data and exported. KCAS uses the IAS -> KCAS table
+// from the dashboard's Inputs panel AS IT IS when each sample arrives: change
+// the table mid-flight and only later samples use the new table (IAS is still
+// recorded, so KCAS can be recomputed afterwards).
 export const measurements = [
   { key: 'pressure_altitude', name: 'Pressure Altitude', units: 'ft', source: 'Ownship Report' },
   { key: 'gps_altitude', name: 'GPS Altitude', units: 'ft', source: 'Ownship Geometric Altitude' },
   { key: 'airspeed', name: 'Indicated Airspeed', units: 'kt', source: 'Levil AHRS' },
+  {
+    key: 'kcas',
+    name: 'Calibrated Airspeed',
+    units: 'kt',
+    source: 'Indicated Airspeed + IAS -> KCAS table (Inputs panel)',
+    derive: { from: 'airspeed', compute: (kias) => bomTestPointSettings().kcasFromKias(kias) }
+  },
   { key: 'ground_speed', name: 'Ground Speed', units: 'kt', source: 'Ownship Report' },
   { key: 'pitch', name: 'Pitch', units: 'deg', source: 'Levil AHRS' },
   { key: 'roll', name: 'Roll', units: 'deg', source: 'Levil AHRS' },
   { key: 'heading', name: 'Heading (Magnetic)', units: 'deg', source: 'Levil AHRS' },
   { key: 'track', name: 'GPS Track (True)', units: 'deg', source: 'Ownship Report' },
   { key: 'vertical_speed', name: 'Vertical Speed', units: 'ft/min', source: 'Levil AHRS' },
-  { key: 'gps_vertical_speed', name: 'GPS Vertical Speed', units: 'ft/min', source: 'Ownship Report' },
+  {
+    key: 'gps_vertical_speed',
+    name: 'GPS Vertical Speed',
+    units: 'ft/min',
+    source: 'Ownship Report'
+  },
   { key: 'slip', name: 'Slip / Skid', units: 'deg', source: 'Levil AHRS' },
   { key: 'yaw_rate', name: 'Yaw Rate', units: 'deg/s', source: 'Levil AHRS' },
   { key: 'g_load', name: 'G Load', units: 'g', source: 'Levil AHRS' },

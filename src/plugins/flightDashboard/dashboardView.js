@@ -25,6 +25,21 @@
  *             READOUT_INTERVAL_MS. The top row is always left empty, so the
  *             row just below it is the most recent value.
  *
+ *   Test-point displays (./testPointCells.js), each showing a "param" from
+ *   the platform's testPoint.params (e.g. KCAS, NZ, Pressure Altitude):
+ *   limitBox  - big current-value box, red/green against MAX/MIN you type in
+ *   trace     - vertical time history with red aircraft-limit lines
+ *   tolerance - test-point tolerance bar with high/low lights
+ *
+ * A platform that sets `testPoint` also gets the "Inputs" side panel on the
+ * right (./sidePanel.js): the IAS -> KCAS correction table, and room for
+ * future inputs.
+ *
+ * Screens: a layout entry with `screen: 'Name'` starts a new screen (one
+ * window tall). Each screen gets a tab in the bar at the top that jumps to it,
+ * the tab of the screen you're on is highlighted, and scrolling settles on
+ * screen boundaries so a screen is never left half in view.
+ *
  * Clear Data empties strips and readouts, like it does Open MCT's plots.
  *
  * Plots show a moving 2-minute window (see ./timeWindows.js); a plot entry
@@ -44,8 +59,18 @@
  *     namespace,                // the platform's object namespace
  *     folderKey,                // the folder that gets this dashboard
  *     measurements,             // from the platform's dictionary.js
- *     layout,                   // [{ key, kind, span, windowSeconds? }], span = grid columns (of 8)
- *     decimals: { altitude: 0 } // optional: readout decimal places by key
+ *     layout,                   // [{ key, kind, span, windowSeconds? }], span = grid columns
+ *     columns: 12,              // optional: grid columns (default 8)
+ *                               // readouts can add label: 'P-Alt' (short title)
+ *                               // any cell can add rows: 2 (that many rows tall)
+ *                               // test-point cells use { param, kind, span } instead of key
+ *     decimals: { altitude: 0 }, // optional: readout decimal places by key
+ *     testPoint: {              // optional (see ../bomData/dashboardView.js)
+ *       settingsId: 'bom',      //   where typed-in values are saved
+ *       params,                 //   { kcas: { label, units, source, ... }, ... }
+ *       defaults,               //   { limits, tolerances } used until you change them
+ *       kcasCorrection: { iasKey: 'airspeed' } // optional: Inputs-panel IAS -> KCAS table
+ *     }
  *   })
  */
 
@@ -53,8 +78,14 @@ import { objectPathToUrl } from '../../tools/url.js';
 import { HORIZONTAL_STRIP_VIEW_KEY } from './horizontalStripView.js';
 import { DASHBOARD_WINDOW_S, getTimeWindows } from './timeWindows.js';
 import VisibilityObserver from '../../utils/visibility/VisibilityObserver.js';
+import { createSidePanel, kcasCorrectionSection, testPointResetSection } from './sidePanel.js';
+import { buildLimitBox, buildToleranceBar, buildTrace, createParamFeed } from './testPointCells.js';
+import { getTestPointSettings } from './testPointSettings.js';
 
-const GRID_COLUMNS = 8;
+const TEST_POINT_KINDS = new Set(['limitBox', 'trace', 'tolerance']);
+
+const GRID_COLUMNS = 8; // default; a platform can pass columns: N
+const READOUT_TIME_MIN_PX = 112; // narrower readouts show only the value, not the time
 const GAP_PX = 6;
 const MIN_ROW_PX = 200; // on very short windows, rows stop shrinking and you scroll instead
 
@@ -93,6 +124,14 @@ function formatTime(timestamp) {
 export default function createDashboardViewProvider(openmct, options) {
   const { key, namespace, folderKey, measurements, layout } = options;
   const decimalsByKey = { ...DEFAULT_DECIMALS, ...(options.decimals || {}) };
+  const gridColumns = options.columns || GRID_COLUMNS;
+  const testPoint = options.testPoint || null;
+  const params = (testPoint && testPoint.params) || {};
+
+  // Which measurement a layout entry reads: its own key, or its param's source.
+  function sourceKeyOf(item) {
+    return TEST_POINT_KINDS.has(item.kind) ? params[item.param].source : item.key;
+  }
 
   return {
     key,
@@ -133,19 +172,21 @@ export default function createDashboardViewProvider(openmct, options) {
         const cell = document.createElement('div');
         cell.style.cssText = CELL_STYLE + `grid-column: span ${span};`;
 
-        const title = document.createElement(titleHref ? 'a' : 'div');
-        title.textContent = titleText;
-        title.style.cssText = TITLE_STYLE;
-        if (titleHref) {
-          title.href = titleHref;
-          title.title = `Open ${titleText} full size`;
-        }
-
         const body = document.createElement('div');
         body.style.cssText =
           'flex:1 1 auto; min-height:0; position:relative; display:flex; flex-direction:column;';
 
-        cell.append(title, body);
+        if (titleText) {
+          const title = document.createElement(titleHref ? 'a' : 'div');
+          title.textContent = titleText;
+          title.style.cssText = TITLE_STYLE;
+          if (titleHref) {
+            title.href = titleHref;
+            title.title = `Open ${titleText} full size`;
+          }
+          cell.append(title);
+        }
+        cell.append(body);
         grid.append(cell);
 
         return body;
@@ -194,6 +235,14 @@ export default function createDashboardViewProvider(openmct, options) {
           `${measurement.name} (${measurement.units})`,
           objectPathToUrl(openmct, childPath, { view: HORIZONTAL_STRIP_VIEW_KEY })
         );
+
+        // Latest value shown in the title, e.g. "Pitch (deg)  4.8".
+        const titleValue = document.createElement('span');
+        titleValue.style.cssText =
+          'float:right; padding-left:6px; font-variant-numeric:tabular-nums;';
+        if (body.previousElementSibling) {
+          body.previousElementSibling.prepend(titleValue);
+        }
 
         const canvas = document.createElement('canvas');
         canvas.style.cssText = 'position:absolute; inset:0; width:100%; height:100%;';
@@ -262,13 +311,20 @@ export default function createDashboardViewProvider(openmct, options) {
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
+          // Narrow strips label every other gridline (-90, -30, 30, 90) so labels don't collide.
+          const labelEvery =
+            (plotRight - plotLeft) / ((2 * STRIP_RANGE_DEG) / STRIP_GRID_DEG) < 24 ? 2 : 1;
           for (let deg = -STRIP_RANGE_DEG; deg <= STRIP_RANGE_DEG; deg += STRIP_GRID_DEG) {
+            const labelled = ((deg + STRIP_RANGE_DEG) / STRIP_GRID_DEG) % labelEvery === 0;
             const x = Math.round(xFor(deg)) + 0.5;
             ctx.strokeStyle = deg === 0 ? 'rgba(127,127,127,0.7)' : 'rgba(127,127,127,0.28)';
             ctx.beginPath();
             ctx.moveTo(x, 0);
             ctx.lineTo(x, plotBottom);
             ctx.stroke();
+            if (!labelled) {
+              continue;
+            }
             ctx.fillStyle = textColor;
             ctx.globalAlpha = 0.6;
             ctx.textAlign =
@@ -282,8 +338,10 @@ export default function createDashboardViewProvider(openmct, options) {
           }
 
           if (!samples.length) {
+            titleValue.textContent = '';
             return;
           }
+          titleValue.textContent = samples[samples.length - 1].value.toFixed(1);
 
           // Time runs downward: pixels per second = one readout row. The newest
           // sample is "now", so the strip freezes when data stops arriving.
@@ -362,8 +420,10 @@ export default function createDashboardViewProvider(openmct, options) {
         });
       }
 
-      function buildReadout(grid, child, measurement, span) {
-        const body = makeCell(grid, span, `${measurement.name} (${measurement.units})`);
+      // label (optional): a short title for narrow columns, e.g. 'P-Alt'.
+      function buildReadout(grid, child, measurement, span, label) {
+        const body = makeCell(grid, span, `${label || measurement.name} (${measurement.units})`);
+        body.parentElement.title = `${measurement.name} (${measurement.units})`;
         body.style.justifyContent = 'flex-start'; // rows stack down from the top
         body.style.overflow = 'hidden';
         body.style.fontVariantNumeric = 'tabular-nums';
@@ -388,7 +448,13 @@ export default function createDashboardViewProvider(openmct, options) {
             if (isNewest) {
               value.style.fontWeight = 'bold';
             }
-            row.append(time, value);
+            // Narrow column: drop the time so the value stays readable.
+            if (body.clientWidth && body.clientWidth < READOUT_TIME_MIN_PX) {
+              row.style.justifyContent = 'flex-end';
+              row.append(value);
+            } else {
+              row.append(time, value);
+            }
           }
           return row;
         }
@@ -455,18 +521,59 @@ export default function createDashboardViewProvider(openmct, options) {
         });
       }
 
+      function buildTestPointCell(grid, item, feed, settings) {
+        const param = params[item.param];
+        let title = null;
+        let href = null;
+        if (item.kind === 'trace') {
+          title = `${param.label} (${param.units})`;
+          // Title opens the source measurement's full-duration plot.
+          href = objectPathToUrl(openmct, [feed.child, ...objectPath], { view: 'plot-single' });
+        } else if (item.kind === 'tolerance') {
+          title = `${param.label} test point`;
+        }
+        const body = makeCell(grid, item.span, title, href);
+        if (item.kind === 'limitBox') {
+          buildLimitBox(body, item.param, feed, settings, cleanups);
+        } else if (item.kind === 'trace') {
+          buildTrace(body, item.param, feed, settings, cleanups);
+        } else {
+          buildToleranceBar(body, item.param, feed, settings, cleanups);
+        }
+      }
+
       return {
         async show(element) {
+          // Dashboard on the left, "Inputs" side panel (if any) on the right.
+          const frame = document.createElement('div');
+          frame.style.cssText = 'height:100%; width:100%; display:flex; min-height:0;';
+          element.append(frame);
+
+          // Left side: screen tabs (if the layout has screens) above the grid.
+          const main = document.createElement('div');
+          main.style.cssText =
+            'flex:1 1 auto; min-width:0; height:100%; display:flex; flex-direction:column;';
+          const hasScreens = layout.some((item) => item.screen);
+          const tabBar = document.createElement('div');
+          tabBar.style.cssText =
+            'flex:none; display:flex; gap:4px; padding:0 0 6px; flex-wrap:wrap;';
+
           const scroller = document.createElement('div');
-          scroller.style.cssText = 'height:100%; width:100%; overflow-y:auto; overflow-x:hidden;';
+          scroller.style.cssText =
+            'position:relative; flex:1 1 auto; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden;' +
+            (hasScreens ? 'scroll-snap-type:y proximity;' : '');
 
           const grid = document.createElement('div');
           grid.style.cssText =
-            `display:grid; grid-template-columns:repeat(${GRID_COLUMNS}, minmax(0, 1fr));` +
+            `display:grid; grid-template-columns:repeat(${gridColumns}, minmax(0, 1fr));` +
             `gap:${GAP_PX}px;`;
 
           scroller.append(grid);
-          element.append(scroller);
+          if (hasScreens) {
+            main.append(tabBar);
+          }
+          main.append(scroller);
+          frame.append(main);
 
           // Two rows per screen: each row is half the visible height.
           function sizeRows() {
@@ -481,7 +588,8 @@ export default function createDashboardViewProvider(openmct, options) {
           cleanups.push(() => resizeObserver.disconnect());
           sizeRows();
 
-          const keys = [...new Set(layout.map((item) => item.key))];
+          const iasKey = testPoint && testPoint.kcasCorrection && testPoint.kcasCorrection.iasKey;
+          const keys = [...new Set([...layout.map(sourceKeyOf), ...(iasKey ? [iasKey] : [])])];
           const objects = await Promise.all(
             keys.map((measurementKey) => openmct.objects.get({ namespace, key: measurementKey }))
           );
@@ -492,17 +600,91 @@ export default function createDashboardViewProvider(openmct, options) {
             keys.map((measurementKey, i) => [measurementKey, objects[i]])
           );
 
+          // Test-point params: one live feed each, shared by all their cells.
+          const settings = testPoint
+            ? getTestPointSettings(testPoint.settingsId, testPoint.defaults)
+            : null;
+          const feeds = new Map();
+          function feedFor(paramKey, param = params[paramKey]) {
+            if (!feeds.has(paramKey)) {
+              const child = objectByKey.get(param.source);
+              const feed = createParamFeed(openmct, child, param, settings, (callback) =>
+                onClearData(child, callback)
+              );
+              cleanups.push(() => feed.destroy());
+              feeds.set(paramKey, feed);
+            }
+            return feeds.get(paramKey);
+          }
+
+          // Side panel sections. To add a future input, add a section here
+          // (see ./sidePanel.js).
+          if (testPoint) {
+            const panel = createSidePanel(testPoint.settingsId);
+            if (iasKey) {
+              const iasFeed = feedFor(`ias:${iasKey}`, { source: iasKey });
+              panel.addSection(
+                'IAS → KCAS correction',
+                kcasCorrectionSection(settings, iasFeed, cleanups)
+              );
+            }
+            panel.addSection('Test point limits', testPointResetSection(settings));
+            frame.append(panel.element);
+          }
+
+          const screens = []; // [{ cell, tab }]
           layout.forEach((item) => {
-            const child = objectByKey.get(item.key);
-            const measurement = measurements.find((m) => m.key === item.key);
-            if (item.kind === 'readout') {
-              buildReadout(grid, child, measurement, item.span);
-            } else if (item.kind === 'strip') {
-              buildStrip(grid, child, measurement, item.span);
+            if (TEST_POINT_KINDS.has(item.kind)) {
+              buildTestPointCell(grid, item, feedFor(item.param), settings);
             } else {
-              buildPlot(grid, scroller, child, measurement, item.span, item.windowSeconds);
+              const child = objectByKey.get(item.key);
+              const measurement = measurements.find((m) => m.key === item.key);
+              if (item.kind === 'readout') {
+                buildReadout(grid, child, measurement, item.span, item.label);
+              } else if (item.kind === 'strip') {
+                buildStrip(grid, child, measurement, item.span);
+              } else {
+                buildPlot(grid, scroller, child, measurement, item.span, item.windowSeconds);
+              }
+            }
+            if (item.rows) {
+              grid.lastElementChild.style.gridRow = `span ${item.rows}`;
+            }
+            if (item.screen) {
+              const cell = grid.lastElementChild;
+              cell.style.scrollSnapAlign = 'start';
+              const tab = document.createElement('button');
+              tab.type = 'button';
+              tab.className = 'c-button';
+              tab.textContent = item.screen;
+              tab.title = `Go to the ${item.screen} screen`;
+              tab.addEventListener('click', () =>
+                scroller.scrollTo({ top: cell.offsetTop - grid.offsetTop, behavior: 'smooth' })
+              );
+              tabBar.append(tab);
+              screens.push({ cell, tab });
             }
           });
+
+          // Highlight the tab of the screen at the top of the view.
+          function markActiveTab() {
+            const top = scroller.scrollTop + grid.offsetTop + 20;
+            let active = screens[0];
+            screens.forEach((screen) => {
+              if (screen.cell.offsetTop <= top) {
+                active = screen;
+              }
+            });
+            screens.forEach((screen) => {
+              const on = screen === active;
+              screen.tab.style.fontWeight = on ? 'bold' : 'normal';
+              screen.tab.style.outline = on ? '2px solid #43b0ff' : 'none';
+            });
+          }
+          if (screens.length) {
+            scroller.addEventListener('scroll', markActiveTab, { passive: true });
+            markActiveTab();
+          }
         },
 
         destroy() {

@@ -7,6 +7,7 @@
  */
 
 import bridgeClient from '../dataSource/bridgeClient.js';
+import { measurements } from './dictionary.js';
 
 export default function BOMRealtimeTelemetryPlugin() {
   return function install(openmct) {
@@ -15,7 +16,16 @@ export default function BOMRealtimeTelemetryPlugin() {
         return domainObject.type === 'bom.telemetry';
       },
       subscribe: function (domainObject, callback) {
-        return bridgeClient.subscribe('bom', domainObject.identifier.key, callback);
+        const key = domainObject.identifier.key;
+        const measurement = measurements.find((m) => m.key === key);
+        if (measurement && measurement.derive) {
+          // Worked-out value (e.g. KCAS): listen to its input and convert.
+          const { from, compute } = measurement.derive;
+          return bridgeClient.subscribe('bom', from, (datum) =>
+            callback({ ...datum, key, value: compute(datum.value) })
+          );
+        }
+        return bridgeClient.subscribe('bom', key, callback);
       }
     });
   };

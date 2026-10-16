@@ -14,7 +14,7 @@
  */
 
 import BOMDashboardViewProvider, { STRIP_KEYS } from './dashboardView.js';
-import BOMDictionaryPlugin, { measurements } from './dictionary.js';
+import BOMDictionaryPlugin, { BOM_FOLDER_KEY, measurements, NAMESPACE } from './dictionary.js';
 import BOMHistoricalTelemetryPlugin from './historicalTelemetry.js';
 import BOMRealtimeTelemetryPlugin from './realtimeTelemetry.js';
 import { installRawData } from '../rawData/plugin.js';
@@ -31,7 +31,12 @@ export default function BOMDataPlugin() {
     openmct.objectViews.addProvider(BOMDashboardViewProvider(openmct));
 
     // "Raw Data" in the folder: every sample since Open MCT loaded, exportable.
-    installRawData(openmct, 'bom', measurements);
+    // Passing the folder's identifier also puts "Export Raw Data as ..." in the
+    // ⋯ menu of the main "BOM Data" page, so you can save without opening Raw Data.
+    installRawData(openmct, 'bom', measurements, {
+      namespace: NAMESPACE,
+      key: BOM_FOLDER_KEY
+    });
 
     // Opened on its own (e.g. clicking a dashboard plot's title), a measurement
     // plot shows the full duration of the data (../flightDashboard/timeWindows.js).

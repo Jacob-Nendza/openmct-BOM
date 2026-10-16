@@ -1,55 +1,60 @@
 /*
  * "Export Raw Data as ..." entries in the ⋯ menu (top-right of the Raw Data
- * view, and the right-click menu on "Raw Data" in the tree).
+ * view, and the right-click menu on "Raw Data" in the tree). A platform's
+ * main folder (e.g. "BOM Data") gets the same entries once its plugin calls
+ * addExportFolder() - see installRawData() in ./plugin.js.
  *
- * The final file type is still TBD, so each format is one entry in FORMATS
- * below. To add a format (JSON, MATLAB .mat, Excel, ...), add an entry with a
- * name, a file extension, a MIME type and a build() that turns the recording
- * into the file's text. A menu item appears for every entry automatically.
+ * Each format is one entry in FORMATS below. To add a format (JSON, MATLAB
+ * .mat, Excel, ...), add an entry with a name, a file extension, a MIME type,
+ * a build() that turns the recording into the file's text and, optionally, a
+ * fileName(). A menu item appears for every entry automatically.
  *
- * Exports ALWAYS write full precision (the table on screen rounds for
- * readability) and oldest-first, the order analysis tools expect.
+ * Exports are written oldest-first, the order analysis tools expect.
  */
 
-import dataClock from '../dataSource/dataClock.js';
+import { bomLogFileName, buildBOMLog } from './bomLogFormat.js';
 import { getRecorder } from './recorder.js';
 import { RAW_DATA_TYPE } from './rawDataView.js';
-
-function csvField(text) {
-  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
 
 const FORMATS = [
   {
     key: 'csv',
-    name: 'CSV',
+    name: 'CSV (BOM log format)',
     extension: 'csv',
     mimeType: 'text/csv',
-    // Opens in Excel, MATLAB (readtable), Python (pandas.read_csv), ...
-    // Columns: timestamp_utc, unix_time_ms, elapsed_s (seconds since the data
-    // started, blank if no data yet), then one per measurement.
-    build(recorder) {
-      const start = dataClock.start;
-      const header = ['timestamp_utc', 'unix_time_ms', 'elapsed_s'].concat(
-        recorder.measurements.map((m) => (m.units ? `${m.name} (${m.units})` : m.name))
-      );
-      const lines = [header.map(csvField).join(',')];
-      recorder.rows.forEach((row) => {
-        const fields = [
-          new Date(row.timestamp).toISOString(),
-          String(row.timestamp),
-          start === null ? '' : ((row.timestamp - start) / 1000).toFixed(3)
-        ];
-        recorder.measurements.forEach((m) => {
-          const value = row.values[m.key];
-          fields.push(value === undefined ? '' : String(value));
-        });
-        lines.push(fields.join(','));
-      });
-      return lines.join('\r\n') + '\r\n';
-    }
+    // Same layout as the Levil BOM's own CSV logs (SOURCE/TAIL/DATE/TIME
+    // header, UNITS, LEGEND, DATA rows) - see ./bomLogFormat.js. Opens in
+    // Excel, MATLAB and Python, and the BOM Emulator can replay it.
+    build: buildBOMLog,
+    fileName: bomLogFileName
   }
 ];
+
+// Main platform folders that also show the export entries:
+// "namespace:key" of the folder -> recorder source id (e.g. 'bom').
+const exportFolders = new Map();
+
+function folderKeyString(identifier) {
+  return `${identifier.namespace}:${identifier.key}`;
+}
+
+export function addExportFolder(folderIdentifier, sourceId) {
+  exportFolders.set(folderKeyString(folderIdentifier), sourceId);
+}
+
+// Which recording does this object export? undefined = no export entries.
+function sourceIdFor(domainObject) {
+  if (!domainObject) {
+    return undefined;
+  }
+  if (domainObject.type === RAW_DATA_TYPE) {
+    return domainObject.rawData.source;
+  }
+  if (domainObject.identifier) {
+    return exportFolders.get(folderKeyString(domainObject.identifier));
+  }
+  return undefined;
+}
 
 function download(text, filename, mimeType) {
   const blob = new Blob([text], { type: mimeType });
@@ -73,18 +78,23 @@ export default function createExportActions(openmct) {
     priority: 1,
 
     appliesTo(objectPath) {
-      return objectPath && objectPath[0] && objectPath[0].type === RAW_DATA_TYPE;
+      return Boolean(objectPath && sourceIdFor(objectPath[0]));
     },
 
     invoke(objectPath) {
-      const recorder = getRecorder(objectPath[0].rawData.source);
+      const recorder = getRecorder(sourceIdFor(objectPath[0]));
       if (!recorder.rows.length) {
         openmct.notifications.alert('No raw data recorded yet - nothing to export.');
         return;
       }
-      // e.g. bom-raw-data_2026-09-29T21-40-05Z.csv
-      const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-') + 'Z';
-      const filename = `${recorder.sourceId}-raw-data_${stamp}.${format.extension}`;
+      let filename;
+      if (format.fileName) {
+        filename = format.fileName(recorder); // e.g. OpenMCT_BOM-20261006T171300.csv
+      } else {
+        // e.g. bom-raw-data_2026-09-29T21-40-05Z.csv
+        const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, '-') + 'Z';
+        filename = `${recorder.sourceId}-raw-data_${stamp}.${format.extension}`;
+      }
       download(format.build(recorder), filename, format.mimeType);
       openmct.notifications.info(
         `Exported ${recorder.rows.length.toLocaleString()} rows to ${filename}`

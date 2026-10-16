@@ -9,11 +9,15 @@
  * Options come from the bridge itself (xplane-bridge/sources/index.js), so
  * adding a source there makes it appear here automatically.
  *
+ * Also adds the "Rate" indicator next to it: how many updates per second are
+ * arriving from the selected source (./dataRateIndicator.js).
+ *
  * Install this BEFORE the platform plugins (XPlane, BOMData) in index.html.
  */
 
 import bridgeClient from './bridgeClient.js';
 import dataClock from './dataClock.js';
+import installDataRateIndicator from './dataRateIndicator.js';
 
 const STATUS_CLASSES = ['s-status-on', 's-status-off', 's-status-disabled'];
 
@@ -69,6 +73,9 @@ export default function DataSourcePlugin() {
       element,
       priority: openmct.priority.HIGH
     });
+
+    // "Rate: 15.2 Hz" next to the Source dropdown.
+    installDataRateIndicator(openmct);
 
     // Time since data flow began, on every chart; resets with Clear Data.
     dataClock.install(openmct);

@@ -6,6 +6,7 @@
  */
 
 import requestHistory from '../rawData/history.js';
+import { measurements } from './dictionary.js';
 
 export default function BOMHistoricalTelemetryPlugin() {
   return function install(openmct) {
@@ -14,8 +15,11 @@ export default function BOMHistoricalTelemetryPlugin() {
         return domainObject.type === 'bom.telemetry';
       },
       // Bridge buffer + everything recorded since Open MCT loaded (../rawData/history.js).
+      // Worked-out values (KCAS) aren't on the bridge, so they come from the recorder only.
       request: function (domainObject, options) {
-        return requestHistory('bom', domainObject.identifier.key, options);
+        const key = domainObject.identifier.key;
+        const measurement = measurements.find((m) => m.key === key);
+        return requestHistory('bom', key, options, !(measurement && measurement.derive));
       }
     });
   };
