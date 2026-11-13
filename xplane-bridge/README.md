@@ -55,17 +55,42 @@ the script prints a checklist of likely causes.
 - `xplane-udp.js` — the RREF protocol client (subscribe/unsubscribe, parse UDP packets).
 - `datarefs.js` — which X-Plane datarefs to pull and how to convert their units. Keys must match `../src/plugins/xplane/dictionary.js`.
 - `test-connection.js` — standalone X-Plane smoke test, no HTTP/WebSocket server involved.
-- `sources/bom.js` — the Levil BOM source: UDP listener on port 4000, GDL90 decoding.
+- `sources/bom.js` — the Levil BOM source: UDP listener on port 43211, GDL90 decoding, capture of undecoded messages.
+- `captures/` — created on first use; raw hex of GDL90 messages the bridge doesn't decode yet (see below).
 - `gdl90.js` — GDL90 decoder (copy of the BOM Emulator's `lib/gdl90.js`).
 
 ## The Levil BOM source
 
-`sources/bom.js` listens for GDL90 on **UDP port 4000** (set `BOM_PORT` to
-change it) and decodes it with `gdl90.js`. It reports 15 values: latitude,
-longitude, pressure and GPS altitude, ground speed, track, both vertical
-speeds (from the Ownship Report / Geometric Altitude messages), and pitch,
-roll, heading, slip, yaw rate, G and indicated airspeed (from Levil's AHRS
-message). Keys must match `../src/plugins/bomData/dictionary.js`.
+`sources/bom.js` listens for GDL90 on **UDP port 43211** (the port the real
+BOM uses, confirmed by packet capture; set `BOM_PORT` to change it) and
+decodes it with `gdl90.js`. It reports:
+
+| From | Values |
+|---|---|
+| Heartbeat (0x00) | GPS fix (1/0) |
+| Ownship Report (0x0A) | latitude, longitude, ground speed, track, GPS vertical speed, NIC, NACp, horizontal containment radius (from NIC) |
+| Geometric Altitude (0x0B) | GPS altitude |
+| Levil AHRS (0x4C 45 01) | pitch, roll, heading, slip, yaw rate, G, indicated airspeed, vertical speed, **pressure altitude (1 ft)** |
+
+Pressure altitude comes from the AHRS message at 1 ft resolution, the same as
+the BOM's SD-card log. The Ownship Report's 25 ft value is used only if the
+AHRS message stops carrying altitude. Track (~1.4°), GPS climb rate
+(64 ft/min) and lat/lon (~2 m) are limited by the GDL90 format itself.
+Keys must match `../src/plugins/bomData/dictionary.js`.
+
+### Finding the rest of the SD-card columns
+
+The BOM's SD log also has satellites, accelerations, rates, temperature, AOA
+and battery. If the BOM broadcasts any of those, they're in messages the
+bridge doesn't decode yet. Those messages are saved automatically:
+
+- The bridge log prints `new message type: ...` the first time it sees each kind.
+- Undecoded messages go to `captures/bom-capture-<UTC time>.csv` (time, message type, raw hex).
+- On stop, the log lists every message type received and how many.
+- `BOM_CAPTURE=all npm start` captures every message; `BOM_CAPTURE=off` turns it off.
+
+Record a session with the real BOM while it also logs to its SD card, then
+line the capture up against the SD log to work out each field's layout.
 
 Test it without the hardware using the **BOM Emulator**
 (`C:\Projects\BOM-Emulator`), which replays recorded BOM logs as GDL90:
@@ -79,7 +104,7 @@ Test it without the hardware using the **BOM Emulator**
 3. In Open MCT: **Source → Levil BOM**, then click **BOM Data**.
 
 With the real BOM, join the laptop to the `BOM-xxxx` Wi-Fi network instead
-of step 2. Only one program can listen on port 4000 at a time, so close the
+of step 2. Only one program can listen on port 43211 at a time, so close the
 emulator's `listen.js` first (the bridge log says so if you forget).
 
 `gdl90.js` is a copy of the BOM Emulator's `lib/gdl90.js`; if you change the

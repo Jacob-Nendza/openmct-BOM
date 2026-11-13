@@ -46,6 +46,17 @@
  * can set windowSeconds to use a different length. Clicking a plot's title
  * opens it expanded, showing the full duration of the data.
  *
+ * Data markers (./dataMarkers.js): double-click any chart (plot, strip, time
+ * history) to drop a green dashed marker line at that time; it shows on every
+ * chart. Double-click a marker to remove it; "Clear markers" in the top bar
+ * removes them all.
+ *
+ * Scrolling back: the mouse wheel over a chart moves it back / forward in time
+ * without changing its scale (./timeScroll.js for strips and time histories,
+ * ../plot/MctPlot.vue for plots; Ctrl + wheel still zooms a plot). A
+ * scrolled-back chart stops following live data until you scroll forward past
+ * "now" or click its Live / reset button.
+ *
  * Every cell's title opens that measurement expanded: plots open the
  * full-duration plot, strips open the horizontal strip chart of the whole
  * session (./horizontalStripView.js).
@@ -70,7 +81,12 @@
  *       params,                 //   { kcas: { label, units, source, ... }, ... }
  *       defaults,               //   { limits, tolerances } used until you change them
  *       kcasCorrection: { iasKey: 'airspeed' } // optional: Inputs-panel IAS -> KCAS table
+ *       inputSections: [{ title, intro, fields, status }] // optional: more Inputs-panel
+ *                               //   numbers (see inputFieldsSection in ./sidePanel.js)
  *     }
+ *
+ *   Strip entries can also set scale: [min, max], gridStep, and
+ *   limit: () => value + onLimitChange(cb) for a red dashed limit line.
  *   })
  */
 
@@ -78,9 +94,21 @@ import { objectPathToUrl } from '../../tools/url.js';
 import { HORIZONTAL_STRIP_VIEW_KEY } from './horizontalStripView.js';
 import { DASHBOARD_WINDOW_S, getTimeWindows } from './timeWindows.js';
 import VisibilityObserver from '../../utils/visibility/VisibilityObserver.js';
-import { createSidePanel, kcasCorrectionSection, testPointResetSection } from './sidePanel.js';
+import {
+  createSidePanel,
+  inputFieldsSection,
+  kcasCorrectionSection,
+  testPointResetSection
+} from './sidePanel.js';
+import dataMarkers, {
+  CANVAS_HELP,
+  drawMarkerLine,
+  MARKER_COLOR,
+  MARKER_HIT_PX
+} from './dataMarkers.js';
 import { buildLimitBox, buildToleranceBar, buildTrace, createParamFeed } from './testPointCells.js';
 import { getTestPointSettings } from './testPointSettings.js';
+import { createTimeScroll } from './timeScroll.js';
 
 const TEST_POINT_KINDS = new Set(['limitBox', 'trace', 'tolerance']);
 
@@ -95,6 +123,7 @@ const READOUT_HISTORY = 300; // rows kept per column (older ones drop off the to
 const STRIP_RANGE_DEG = 90; // strip charts run from -90 to +90
 const STRIP_GRID_DEG = 30; // vertical gridline every 30 degrees
 const STRIP_TRACE_COLOR = '#43b0ff'; // same blue as Open MCT's first plot series
+const STRIP_LIMIT_COLOR = '#ff4d4d'; // optional limit line (e.g. critical AoA)
 const STRIP_AXIS_PX = 16; // space at the bottom for the -90 ... +90 labels
 
 // Readout decimal places by measurement key (a platform can override these).
@@ -227,7 +256,11 @@ export default function createDashboardViewProvider(openmct, options) {
         );
       }
 
-      function buildStrip(grid, child, measurement, span) {
+      function buildStrip(grid, child, measurement, item) {
+        const span = item.span;
+        // Scale across: layout `scale: [min, max]` and `gridStep` (default -90..+90 by 30).
+        const [scaleMin, scaleMax] = item.scale || [-STRIP_RANGE_DEG, STRIP_RANGE_DEG];
+        const gridStep = item.gridStep || STRIP_GRID_DEG;
         const childPath = [child, ...objectPath];
         const body = makeCell(
           grid,
@@ -290,11 +323,8 @@ export default function createDashboardViewProvider(openmct, options) {
           // as the readout columns.
           const nowY = READOUT_ROW_PX;
           const xFor = (value) => {
-            const clamped = Math.max(-STRIP_RANGE_DEG, Math.min(STRIP_RANGE_DEG, value));
-            return (
-              plotLeft +
-              ((clamped + STRIP_RANGE_DEG) / (2 * STRIP_RANGE_DEG)) * (plotRight - plotLeft)
-            );
+            const clamped = Math.max(scaleMin, Math.min(scaleMax, value));
+            return plotLeft + ((clamped - scaleMin) / (scaleMax - scaleMin)) * (plotRight - plotLeft);
           };
 
           // Row lines, top-aligned like the readout rows.
@@ -313,9 +343,9 @@ export default function createDashboardViewProvider(openmct, options) {
           ctx.textBaseline = 'bottom';
           // Narrow strips label every other gridline (-90, -30, 30, 90) so labels don't collide.
           const labelEvery =
-            (plotRight - plotLeft) / ((2 * STRIP_RANGE_DEG) / STRIP_GRID_DEG) < 24 ? 2 : 1;
-          for (let deg = -STRIP_RANGE_DEG; deg <= STRIP_RANGE_DEG; deg += STRIP_GRID_DEG) {
-            const labelled = ((deg + STRIP_RANGE_DEG) / STRIP_GRID_DEG) % labelEvery === 0;
+            (plotRight - plotLeft) / ((scaleMax - scaleMin) / gridStep) < 24 ? 2 : 1;
+          for (let deg = scaleMin; deg <= scaleMax; deg += gridStep) {
+            const labelled = Math.round((deg - scaleMin) / gridStep) % labelEvery === 0;
             const x = Math.round(xFor(deg)) + 0.5;
             ctx.strokeStyle = deg === 0 ? 'rgba(127,127,127,0.7)' : 'rgba(127,127,127,0.28)';
             ctx.beginPath();
@@ -327,26 +357,46 @@ export default function createDashboardViewProvider(openmct, options) {
             }
             ctx.fillStyle = textColor;
             ctx.globalAlpha = 0.6;
-            ctx.textAlign =
-              deg === -STRIP_RANGE_DEG ? 'left' : deg === STRIP_RANGE_DEG ? 'right' : 'center';
+            ctx.textAlign = deg === scaleMin ? 'left' : deg === scaleMax ? 'right' : 'center';
             ctx.fillText(
               String(deg),
-              deg === -STRIP_RANGE_DEG ? plotLeft : deg === STRIP_RANGE_DEG ? plotRight : x,
+              deg === scaleMin ? plotLeft : deg === scaleMax ? plotRight : x,
               height - 2
             );
             ctx.globalAlpha = 1;
           }
 
+          // Optional limit line (layout `limit: () => value`, e.g. critical AoA).
+          const limit = item.limit ? item.limit() : null;
+          if (Number.isFinite(limit) && limit >= scaleMin && limit <= scaleMax) {
+            const x = Math.round(xFor(limit)) + 0.5;
+            ctx.save();
+            ctx.strokeStyle = STRIP_LIMIT_COLOR;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, plotBottom);
+            ctx.stroke();
+            ctx.restore();
+          }
+
           if (!samples.length) {
             titleValue.textContent = '';
+            scroll.frame(null);
+            view = null;
             return;
           }
           titleValue.textContent = samples[samples.length - 1].value.toFixed(1);
 
           // Time runs downward: pixels per second = one readout row. The newest
           // sample is "now", so the strip freezes when data stops arriving.
+          // Scrolled back (mouse wheel), the top row shows that earlier time.
           const newest = samples[samples.length - 1].timestamp;
-          const yFor = (timestamp) => nowY + ((newest - timestamp) / 1000) * READOUT_ROW_PX;
+          const viewNow = scroll.frame(newest);
+          const yFor = (timestamp) => nowY + ((viewNow - timestamp) / 1000) * READOUT_ROW_PX;
+          const oldestShown = viewNow - ((plotBottom - nowY) / READOUT_ROW_PX) * 1000;
+          view = { newest, viewNow, nowY, plotBottom };
 
           ctx.save();
           ctx.beginPath();
@@ -355,30 +405,63 @@ export default function createDashboardViewProvider(openmct, options) {
           ctx.strokeStyle = STRIP_TRACE_COLOR;
           ctx.lineWidth = 1.5;
           ctx.beginPath();
-          let started = false;
-          for (let i = samples.length - 1; i >= 0; i--) {
-            const y = yFor(samples[i].timestamp);
-            const x = xFor(samples[i].value);
-            if (!started) {
+          const shown = scroll.samplesBetween(oldestShown, viewNow + 1000);
+          for (let i = shown.length - 1; i >= 0; i--) {
+            const y = yFor(shown[i].timestamp);
+            const x = xFor(shown[i].value);
+            if (i === shown.length - 1) {
               ctx.moveTo(x, y);
-              started = true;
             } else {
               ctx.lineTo(x, y);
-            }
-            if (y > plotBottom) {
-              break; // older samples are off the bottom
             }
           }
           ctx.stroke();
 
-          // Marker on the most recent value.
-          const last = samples[samples.length - 1];
-          ctx.fillStyle = STRIP_TRACE_COLOR;
-          ctx.beginPath();
-          ctx.arc(xFor(last.value), nowY, 3, 0, Math.PI * 2);
-          ctx.fill();
+          // Data markers: green dashed lines across the strip.
+          dataMarkers.list().forEach((marker) => {
+            const y = Math.round(yFor(marker.timestamp)) + 0.5;
+            if (y >= 0 && y <= plotBottom) {
+              drawMarkerLine(ctx, plotLeft, y, plotRight, y, marker.number);
+            }
+          });
+
+          // Marker on the most recent value (only while following live data).
+          if (scroll.isLive()) {
+            const last = samples[samples.length - 1];
+            ctx.fillStyle = STRIP_TRACE_COLOR;
+            ctx.beginPath();
+            ctx.arc(xFor(last.value), nowY, 3, 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.restore();
         }
+
+        // Scroll back in time with the mouse wheel (./timeScroll.js).
+        let view = null; // what the last draw showed, for double-click markers
+        const scroll = createTimeScroll({
+          body,
+          canvas,
+          samples,
+          pxPerSecond: READOUT_ROW_PX,
+          request: (start, end) => openmct.telemetry.request(child, { start, end }),
+          redraw: scheduleDraw
+        });
+        cleanups.push(() => scroll.destroy());
+
+        // Double-click: add a data marker at that time (or remove the one there).
+        canvas.title = CANVAS_HELP;
+        canvas.addEventListener('dblclick', (event) => {
+          if (!view) {
+            return;
+          }
+          const y = event.clientY - canvas.getBoundingClientRect().top;
+          if (y > view.plotBottom) {
+            return; // the degree labels
+          }
+          const timestamp = Math.min(view.newest, scroll.timeAtY(y, view.nowY, view.viewNow));
+          dataMarkers.toggle(timestamp, (MARKER_HIT_PX / READOUT_ROW_PX) * 1000);
+        });
+        cleanups.push(dataMarkers.onChange(scheduleDraw));
 
         function addSample(sample) {
           if (samples.length && sample.timestamp <= samples[samples.length - 1].timestamp) {
@@ -410,8 +493,12 @@ export default function createDashboardViewProvider(openmct, options) {
         resizeObserver.observe(body);
         onClearData(child, () => {
           samples.length = 0;
+          scroll.reset();
           scheduleDraw();
         });
+        if (item.onLimitChange) {
+          cleanups.push(item.onLimitChange(scheduleDraw));
+        }
         scheduleDraw();
 
         cleanups.push(() => {
@@ -556,7 +643,7 @@ export default function createDashboardViewProvider(openmct, options) {
           const hasScreens = layout.some((item) => item.screen);
           const tabBar = document.createElement('div');
           tabBar.style.cssText =
-            'flex:none; display:flex; gap:4px; padding:0 0 6px; flex-wrap:wrap;';
+            'flex:none; display:flex; align-items:center; gap:4px; padding:0 0 6px; flex-wrap:wrap;';
 
           const scroller = document.createElement('div');
           scroller.style.cssText =
@@ -569,10 +656,37 @@ export default function createDashboardViewProvider(openmct, options) {
             `gap:${GAP_PX}px;`;
 
           scroller.append(grid);
-          if (hasScreens) {
-            main.append(tabBar);
-          }
+          main.append(tabBar); // screen tabs (if any) and the data-marker controls
           main.append(scroller);
+
+          // Data markers (./dataMarkers.js): count, hint and Clear, on the right of the bar.
+          const markerBar = document.createElement('div');
+          markerBar.style.cssText =
+            'order:1; margin-left:auto; display:flex; align-items:center; gap:8px; white-space:nowrap;';
+          const markerHint = document.createElement('span');
+          markerHint.textContent =
+            'Double-click a chart to mark a time · scroll a chart to look back';
+          markerHint.style.cssText = 'opacity:0.6; font-size:0.9em;';
+          const markerCount = document.createElement('span');
+          markerCount.style.cssText = 'font-weight:bold;';
+          const clearMarkers = document.createElement('button');
+          clearMarkers.type = 'button';
+          clearMarkers.className = 'c-button';
+          clearMarkers.textContent = 'Clear markers';
+          clearMarkers.title = 'Remove every data marker from every chart';
+          clearMarkers.addEventListener('click', () => dataMarkers.clear());
+          markerBar.append(markerHint, markerCount, clearMarkers);
+          tabBar.append(markerBar);
+          function showMarkerCount(list = dataMarkers.list()) {
+            markerCount.textContent = `${list.length} marker${list.length === 1 ? '' : 's'}`;
+            markerCount.style.color = list.length ? MARKER_COLOR : '';
+            markerCount.title = list.length
+              ? list.map((m) => `M${m.number}  ${formatTime(m.timestamp)} UTC`).join('\n')
+              : 'No data markers yet';
+            clearMarkers.disabled = !list.length;
+          }
+          showMarkerCount();
+          cleanups.push(dataMarkers.onChange(showMarkerCount));
           frame.append(main);
 
           // Two rows per screen: each row is half the visible height.
@@ -628,6 +742,9 @@ export default function createDashboardViewProvider(openmct, options) {
                 kcasCorrectionSection(settings, iasFeed, cleanups)
               );
             }
+            (testPoint.inputSections || []).forEach((section) => {
+              panel.addSection(section.title, inputFieldsSection(settings, section, cleanups));
+            });
             panel.addSection('Test point limits', testPointResetSection(settings));
             frame.append(panel.element);
           }
@@ -642,7 +759,7 @@ export default function createDashboardViewProvider(openmct, options) {
               if (item.kind === 'readout') {
                 buildReadout(grid, child, measurement, item.span, item.label);
               } else if (item.kind === 'strip') {
-                buildStrip(grid, child, measurement, item.span);
+                buildStrip(grid, child, measurement, item);
               } else {
                 buildPlot(grid, scroller, child, measurement, item.span, item.windowSeconds);
               }

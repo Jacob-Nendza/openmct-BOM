@@ -5,10 +5,13 @@
  *   PARAMS                - what the test-point displays show
  *   TEST_POINT_DEFAULTS   - starting MAX/MIN and center/+/- values
  *   bomTestPointSettings  - the saved values you type in, including the
- *                           IAS -> KCAS correction table (Inputs panel)
+ *                           IAS -> KCAS correction table and the True AoA
+ *                           inputs (Inputs panel)
+ *   bomTrueAoa            - True AoA from one BOM packet (./trueAoa.js)
  */
 
 import { getTestPointSettings } from '../flightDashboard/testPointSettings.js';
+import { AOA_INPUT_DEFAULTS, aoaStatus, computeTrueAoa } from './trueAoa.js';
 
 /*
  * What the test-point displays show.
@@ -40,11 +43,25 @@ export const TEST_POINT_DEFAULTS = {
     nz: { center: 2.5, plusMinus: 2.5 },
     kcas: { center: 375, plusMinus: 20 },
     pressure_altitude: { center: 10000, plusMinus: 1000 }
-  }
+  },
+  // True AoA inputs (Inputs panel), see ./trueAoa.js.
+  inputs: { ...AOA_INPUT_DEFAULTS }
 };
 
 export const SETTINGS_ID = 'bom';
 
 export function bomTestPointSettings() {
   return getTestPointSettings(SETTINGS_ID, TEST_POINT_DEFAULTS);
+}
+
+// True AoA (deg) for one BOM packet, using the Inputs-panel values as they are
+// right now (like KCAS). Returns NaN outside the valid conditions, so no
+// sample is recorded; the reason is shown in the Inputs panel.
+export function bomTrueAoa(values) {
+  const settings = bomTestPointSettings();
+  const result = computeTrueAoa(values, settings.get().inputs, (kias) =>
+    settings.kcasFromKias(kias)
+  );
+  aoaStatus.set(result);
+  return result.aoa;
 }

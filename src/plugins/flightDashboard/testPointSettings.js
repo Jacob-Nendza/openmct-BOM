@@ -6,6 +6,9 @@
  *                 the vertical time-history charts.
  *   tolerances  - test-point center value and +/- for the tolerance bars.
  *   kcasTable   - the IAS -> KCAS correction table from the side panel.
+ *   inputs      - other numbers typed into the side panel, by name (e.g. the
+ *                 BOM's True AoA chord offset / OAT). Defaults come from the
+ *                 platform's defaults.inputs; null = left blank.
  *
  * Everything is saved in the browser (localStorage), so it survives a page
  * reload. The first time, the platform's defaults are used (for the BOM:
@@ -62,6 +65,14 @@ function merge(defaults, saved) {
       }
     });
   });
+  if (saved.inputs && typeof saved.inputs === 'object') {
+    Object.keys(state.inputs || {}).forEach((field) => {
+      const value = saved.inputs[field];
+      if (Number.isFinite(value) || value === null) {
+        state.inputs[field] = value;
+      }
+    });
+  }
   if (Array.isArray(saved.kcasTable)) {
     state.kcasTable = saved.kcasTable.map((row) => ({
       kias: Number.isFinite(row && row.kias) ? row.kias : null,
@@ -140,7 +151,12 @@ function createStore(id, defaults) {
       changed();
     },
 
-    // Limits and tolerances back to the platform defaults (the KCAS table is kept).
+    setInput(field, value) {
+      state.inputs = { ...state.inputs, [field]: value };
+      changed();
+    },
+
+    // Limits and tolerances back to the platform defaults (the KCAS table and inputs are kept).
     resetTestPoint() {
       const fresh = clone(defaults);
       state.limits = fresh.limits;
@@ -156,7 +172,7 @@ function createStore(id, defaults) {
 
 export function getTestPointSettings(id, defaults) {
   if (!stores.has(id)) {
-    stores.set(id, createStore(id, { kcasTable: [], ...defaults }));
+    stores.set(id, createStore(id, { kcasTable: [], inputs: {}, ...defaults }));
   }
   return stores.get(id);
 }

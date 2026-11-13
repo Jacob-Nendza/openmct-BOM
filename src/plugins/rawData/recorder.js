@@ -19,6 +19,13 @@
  * dictionary, e.g. the BOM's KCAS from indicated airspeed) are recorded in the
  * same row as the value they come from, computed when the sample arrives.
  *
+ * Worked out from SEVERAL values (`derive: { inputs, optional, compute }`,
+ * e.g. the BOM's True AoA): computed as soon as a row has every key in
+ * `inputs` (all from the same packet). `optional` keys come from the same row
+ * if present, otherwise the latest value within OPTIONAL_MAX_AGE_MS. NaN
+ * results are not recorded. Live results are passed to onDerived() listeners
+ * (the realtime telemetry provider) - see subscribeDerived().
+ *
  * Everything lives in browser memory: refreshing the page starts a new
  * recording. Export before you refresh.
  */
@@ -26,6 +33,7 @@
 import bridgeClient from '../dataSource/bridgeClient.js';
 import dataClock from '../dataSource/dataClock.js';
 
+const OPTIONAL_MAX_AGE_MS = 5000; // how old an `optional` derive input may be
 const MAX_ROWS = 2000000; // safety cap (~several hours at BOM rates); oldest rows drop first
 
 const recorders = new Map(); // sourceId -> recorder
@@ -35,6 +43,8 @@ function createRecorder(sourceId, measurements) {
   const listeners = new Set();
   let droppedRows = 0;
   let notifyQueued = false;
+  const latest = {}; // key -> { value, timestamp }, for optional derive inputs
+  const derivedListeners = new Map(); // derived key -> Set(callback)
 
   function notify() {
     if (notifyQueued) {
@@ -93,8 +103,47 @@ function createRecorder(sourceId, measurements) {
       }
     }
     row.values[key] = value;
+    if (!latest[key] || timestamp >= latest[key].timestamp) {
+      latest[key] = { value, timestamp };
+    }
     dataClock.noteSample(timestamp);
     notify();
+    return row;
+  }
+
+  // Multi-input worked-out values (e.g. True AoA) for this row, once complete.
+  const multiDerived = measurements.filter((m) => m.derive && Array.isArray(m.derive.inputs));
+  function deriveFromRow(row, key, live) {
+    multiDerived.forEach((m) => {
+      const { inputs, optional = [], compute } = m.derive;
+      if (!inputs.includes(key) || m.key in row.values) {
+        return;
+      }
+      if (!inputs.every((input) => input in row.values)) {
+        return; // rest of the packet hasn't arrived yet
+      }
+      const values = {};
+      inputs.forEach((input) => (values[input] = row.values[input]));
+      optional.forEach((input) => {
+        if (input in row.values) {
+          values[input] = row.values[input];
+        } else if (
+          latest[input] &&
+          Math.abs(row.timestamp - latest[input].timestamp) <= OPTIONAL_MAX_AGE_MS
+        ) {
+          values[input] = latest[input].value;
+        }
+      });
+      const result = Number(compute(values));
+      if (!Number.isFinite(result)) {
+        return;
+      }
+      add(m.key, result, row.timestamp);
+      if (live) {
+        const datum = { source: sourceId, key: m.key, value: result, timestamp: row.timestamp };
+        (derivedListeners.get(m.key) || []).forEach((callback) => callback(datum));
+      }
+    });
   }
 
   // Bridge measurements, and the worked-out ones that come from each.
@@ -102,13 +151,17 @@ function createRecorder(sourceId, measurements) {
   const derivedFrom = (key) => measurements.filter((m) => m.derive && m.derive.from === key);
 
   // Record one bridge sample, plus anything worked out from it.
-  function addSample(key, value, timestamp) {
-    add(key, value, timestamp);
+  // live = true for samples arriving now (false for bridge history on connect).
+  function addSample(key, value, timestamp, live = false) {
+    const row = add(key, value, timestamp);
     derivedFrom(key).forEach((m) => {
       if (Number.isFinite(Number(value))) {
         add(m.key, m.derive.compute(Number(value)), timestamp);
       }
     });
+    if (row) {
+      deriveFromRow(row, key, live);
+    }
   }
 
   function loadBridgeHistory() {
@@ -127,7 +180,7 @@ function createRecorder(sourceId, measurements) {
   // Record live samples for every measurement, from now on.
   direct.forEach((measurement) => {
     bridgeClient.subscribe(sourceId, measurement.key, (datum) =>
-      addSample(measurement.key, datum.value, datum.timestamp)
+      addSample(measurement.key, datum.value, datum.timestamp, true)
     );
   });
 
@@ -150,6 +203,14 @@ function createRecorder(sourceId, measurements) {
     onChange(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    // Live results of a multi-input worked-out measurement (e.g. 'aoa').
+    subscribeDerived(key, callback) {
+      if (!derivedListeners.has(key)) {
+        derivedListeners.set(key, new Set());
+      }
+      derivedListeners.get(key).add(callback);
+      return () => derivedListeners.get(key).delete(callback);
     }
   };
 }

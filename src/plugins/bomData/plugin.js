@@ -6,6 +6,7 @@
  *   historicalTelemetry.js - recent samples from the bridge (/history/bom/<key>)
  *   realtimeTelemetry.js   - live samples over the bridge WebSocket
  *   dashboardView.js       - the plot dashboard shown for the folder
+ *   trueAoa.js             - True AoA (deg) worked out from pitch, VS, TAS, bank
  *   ../rawData/            - the folder's "Raw Data" table + export
  *
  * Data only flows when "Levil BOM" is picked in the Source dropdown. The UDP
@@ -13,7 +14,7 @@
  * For testing without hardware, run the BOM Emulator (C:\Projects\BOM-Emulator).
  */
 
-import BOMDashboardViewProvider, { STRIP_KEYS } from './dashboardView.js';
+import BOMDashboardViewProvider, { AOA_STRIP, STRIP_KEYS } from './dashboardView.js';
 import BOMDictionaryPlugin, { BOM_FOLDER_KEY, measurements, NAMESPACE } from './dictionary.js';
 import BOMHistoricalTelemetryPlugin from './historicalTelemetry.js';
 import BOMRealtimeTelemetryPlugin from './realtimeTelemetry.js';
@@ -44,6 +45,7 @@ export default function BOMDataPlugin() {
 
     // Pitch / Roll (the dashboard's strips) open as a horizontal strip chart
     // of the whole session instead (../flightDashboard/horizontalStripView.js).
-    registerHorizontalStrips(openmct, 'bom.telemetry', 'bom', STRIP_KEYS);
+    // True AoA gets its own -10..+30 scale and the critical-AoA line.
+    registerHorizontalStrips(openmct, 'bom.telemetry', 'bom', STRIP_KEYS, { aoa: AOA_STRIP });
   };
 }

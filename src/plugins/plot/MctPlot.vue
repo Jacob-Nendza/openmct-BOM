@@ -99,6 +99,24 @@
             />
           </div>
 
+          <!-- Data markers (flightDashboard/dataMarkers.js): green dashed lines at marked times -->
+          <div
+            v-if="visibleDataMarkers.length"
+            class="c-plot-data-markers"
+            aria-hidden="true"
+            :style="{
+              position: 'absolute',
+              inset: 0,
+              overflow: 'hidden',
+              pointerEvents: 'none',
+              zIndex: 2
+            }"
+          >
+            <div v-for="marker in visibleDataMarkers" :key="marker.id" :style="marker.style">
+              <span :style="dataMarkerLabelStyle">M{{ marker.number }}</span>
+            </div>
+          </div>
+
           <div
             class="gl-plot__local-controls h-local-controls h-local-controls--overlay-content c-local-controls--show-on-hover"
           >
@@ -210,6 +228,9 @@ import TagEditorClassNames from '../inspectorViews/annotations/tags/TagEditorCla
 import XAxis from './axis/XAxis.vue';
 import YAxis from './axis/YAxis.vue';
 import MctChart from './chart/MctChart.vue';
+import dataClock from '../dataSource/dataClock.js';
+import dataMarkers, { MARKER_COLOR, MARKER_HIT_PX } from '../flightDashboard/dataMarkers.js';
+import { wheelPixels } from '../flightDashboard/timeScroll.js';
 import configStore from './configuration/ConfigStore.js';
 import PlotConfigurationModel from './configuration/PlotConfigurationModel.js';
 import eventHelpers from './lib/eventHelpers.js';
@@ -218,6 +239,10 @@ import MctTicks from './MctTicks.vue';
 
 const OFFSET_THRESHOLD = 10;
 const AXES_PADDING = 20;
+const SCROLL_FRACTION_PER_NOTCH = 0.1; // one mouse-wheel notch moves 10% of the visible time
+const WHEEL_NOTCH_PX = 100;
+// Flight-data measurements: scrolling back stops at the start of the data (../dataSource/dataClock.js).
+const DATA_CLOCK_TYPES = ['bom.telemetry', 'xplane.telemetry'];
 
 export default {
   components: {
@@ -315,7 +340,19 @@ export default {
       yAxisListWithRange: [],
       config: {},
       isUtc: this.openmct.time.getTimeSystem().isUTCBased,
-      topAxisHeight: 20
+      topAxisHeight: 20,
+      dataMarkerList: dataMarkers.list(),
+      dataMarkerRange: null,
+      dataMarkerLabelStyle: {
+        position: 'absolute',
+        top: '2px',
+        left: '4px',
+        color: MARKER_COLOR,
+        fontSize: '10px',
+        fontWeight: 'bold',
+        whiteSpace: 'nowrap',
+        textShadow: '0 0 2px rgba(0,0,0,0.8)'
+      }
     };
   },
   computed: {
@@ -366,6 +403,27 @@ export default {
     },
     seriesDataLoaded() {
       return this.pending === 0 && this.loaded;
+    },
+    // Data markers inside the plot's current time range, positioned by percent.
+    visibleDataMarkers() {
+      const range = this.dataMarkerRange;
+      if (!range || !(range.max > range.min)) {
+        return [];
+      }
+      return this.dataMarkerList
+        .filter((marker) => marker.timestamp >= range.min && marker.timestamp <= range.max)
+        .map((marker) => ({
+          ...marker,
+          style: {
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: `${((marker.timestamp - range.min) / (range.max - range.min)) * 100}%`,
+            width: '2px',
+            marginLeft: '-1px',
+            background: `repeating-linear-gradient(to bottom, ${MARKER_COLOR} 0 6px, transparent 6px 10px)`
+          }
+        }));
     }
   },
   watch: {
@@ -428,6 +486,9 @@ export default {
     );
 
     this.openmct.objectViews.on('clearData', this.clearData);
+    this.removeDataMarkerListener = dataMarkers.onChange((list) => {
+      this.dataMarkerList = list;
+    });
     this.EventBus.$on('loading-complete', this.loadAnnotationsIfAllowed);
     this.openmct.selection.on('change', this.updateSelection);
     this.yAxisListWithRange = [this.config.yAxis, ...this.config.additionalYAxes];
@@ -445,6 +506,10 @@ export default {
     document.removeEventListener('keyup', this.handleKeyUp);
     document.body.removeEventListener('click', this.cancelSelection);
     this.EventBus.$off('loading-complete', this.loadAnnotationsIfAllowed);
+    if (this.removeDataMarkerListener) {
+      this.removeDataMarkerListener();
+    }
+    window.clearTimeout(this.stillScrolling);
     this.destroy();
   },
   methods: {
@@ -911,7 +976,9 @@ export default {
       this.listenTo(this.canvas, 'mouseleave', this.untrackMousePosition, this);
       this.listenTo(this.canvas, 'mousedown', this.onMouseDown, this);
       this.listenTo(this.canvas, 'click', this.selectNearbyAnnotations, this);
-      this.listenTo(this.canvas, 'wheel', this.wheelZoom, this);
+      // Wheel scrolls back / forward in time; Ctrl + wheel (or a trackpad pinch) zooms.
+      this.listenTo(this.canvas, 'wheel', this.onWheel, this);
+      this.listenTo(this.canvas, 'dblclick', this.toggleDataMarker, this);
     },
 
     marqueeAnnotations(annotationsToSelect) {
@@ -1006,6 +1073,7 @@ export default {
 
       // Setup canvas etc.
       this.xScale = new LinearScale(this.config.xAxis.get('displayRange'));
+      this.dataMarkerRange = this.config.xAxis.get('displayRange') || null;
       this.yScale = [];
       this.yAxisListWithRange.forEach((yAxis) => {
         this.yScale.push({
@@ -1033,6 +1101,7 @@ export default {
     onXAxisChange(displayBounds) {
       if (displayBounds) {
         this.xScale.domain(displayBounds);
+        this.dataMarkerRange = { min: displayBounds.min, max: displayBounds.max };
       }
     },
 
@@ -1171,6 +1240,9 @@ export default {
         const isFrozen =
           this.config.xAxis.get('frozen') === true && this.config.yAxis.get('frozen') === true;
         this.isFrozenOnMouseDown = isFrozen;
+        // A plain click on a scrolled-back plot shouldn't also freeze its y-axis.
+        this.historyLengthOnMouseDown = this.plotHistory.length;
+        this.yFrozenOnMouseDown = this.yAxisListWithRange.map((yAxis) => yAxis.get('frozen'));
 
         if (event.altKey && !event.shiftKey) {
           return this.startPan(event);
@@ -1207,6 +1279,15 @@ export default {
       if (!isAction && !this.isFrozenOnMouseDown) {
         this.clearPanZoomHistory();
         this.synchronizeIfBoundsMatch();
+      } else if (
+        this.plotHistory.length === this.historyLengthOnMouseDown &&
+        this.yFrozenOnMouseDown
+      ) {
+        // Just a click (no new zoom): put the y-axes back how they were.
+        this.yAxisListWithRange.forEach((yAxis, index) => {
+          yAxis.set('frozen', this.yFrozenOnMouseDown[index] === true);
+        });
+        this.setStatus();
       }
     },
 
@@ -1617,6 +1698,102 @@ export default {
       }
 
       this.userViewportChangeEnd();
+    },
+
+    onWheel(event) {
+      if (event.ctrlKey || event.metaKey) {
+        return this.wheelZoom(event);
+      }
+
+      return this.wheelScroll(event);
+    },
+
+    /**
+     * Mouse wheel / two-finger scroll: slide the time axis back (scroll down,
+     * or left) or forward (scroll up, or right) without changing the zoom -
+     * the visible time span stays the same. Only the x-axis is held, so the
+     * y-axis keeps autoscaling unless you've zoomed it. In real-time mode,
+     * scrolling forward past "now" follows live data again.
+     */
+    wheelScroll(event) {
+      event.preventDefault();
+      const xRange = this.config.xAxis.get('displayRange');
+      const width = this.canvas ? this.canvas.getBoundingClientRect().width : 0;
+      if (!xRange || !width) {
+        return;
+      }
+
+      // Down = back in time; a sideways trackpad swipe also works (left = back).
+      const backPx = wheelPixels(event, width) || -(event.deltaX || 0);
+      if (!backPx) {
+        return;
+      }
+      const span = xRange.max - xRange.min;
+      // ms; negative = back in time. Same fraction of the window at any plot width.
+      let shift = -(backPx / WHEEL_NOTCH_PX) * SCROLL_FRACTION_PER_NOTCH * span;
+      const live = this.config.xAxis.get('range');
+
+      // Don't scroll back past the start of the flight data.
+      if (DATA_CLOCK_TYPES.includes(this.domainObject.type) && dataClock.start !== null) {
+        const earliestMin = Math.min(xRange.min, dataClock.start);
+        shift = Math.max(shift, earliestMin - xRange.min);
+        if (shift === 0) {
+          return;
+        }
+      }
+
+      if (this.isRealTime && live && xRange.max + shift >= live.max) {
+        this.returnToLive();
+
+        return;
+      }
+
+      if (!this.stillScrolling) {
+        this.trackHistory(); // one undo step per scroll gesture
+      }
+      this.config.xAxis.set('frozen', true);
+      this.config.xAxis.set('displayRange', {
+        min: xRange.min + shift,
+        max: xRange.max + shift
+      });
+      this.synchronizeIfBoundsMatch(); // mark out of sync now, so old data isn't purged
+
+      window.clearTimeout(this.stillScrolling);
+      this.stillScrolling = window.setTimeout(() => {
+        this.stillScrolling = undefined;
+        this.userViewportChangeEnd(); // load data for the new range
+      }, 250);
+    },
+
+    // Scrolled forward to "now": follow live data again.
+    returnToLive() {
+      window.clearTimeout(this.stillScrolling);
+      this.stillScrolling = undefined;
+      const yZoomed = this.yAxisListWithRange.some((yAxis) => yAxis.get('frozen'));
+      if (yZoomed) {
+        // Keep a y-axis zoom; just let the time axis follow live data.
+        this.config.xAxis.set('frozen', false);
+        this.setStatus();
+        this.userViewportChangeEnd();
+      } else {
+        this.resumeRealtimeData();
+      }
+    },
+
+    // Double-click: add a data marker at that time, or remove the one there.
+    toggleDataMarker(event) {
+      const range = this.config.xAxis.get('displayRange');
+      const rect = this.canvas ? this.canvas.getBoundingClientRect() : null;
+      if (!range || !rect || !rect.width) {
+        return;
+      }
+      const msPerPx = (range.max - range.min) / rect.width;
+      let timestamp = range.min + (event.clientX - rect.left) * msPerPx;
+      const live = this.config.xAxis.get('range');
+      if (this.isRealTime && live) {
+        timestamp = Math.min(timestamp, Date.now()); // not in the future
+      }
+      dataMarkers.toggle(timestamp, MARKER_HIT_PX * msPerPx);
     },
 
     wheelZoom(event) {

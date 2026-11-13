@@ -11,28 +11,36 @@
  *   - fixed -90..+90 degree scale (same as the dashboard strips)
  *   - UTC time across the top, time since data start along the bottom
  *   - hover for the exact value and time at any point
+ *   - double-click to drop a data marker (green dashed line, ./dataMarkers.js);
+ *     double-click a marker to remove it. Markers are shared with every chart.
+ *     (No scrolling here: the whole session is always on screen.)
  *
  * Long sessions stay fast: each pixel column draws the min..max of the
  * samples that fall in it, so no spike is ever hidden.
  *
  * A platform turns this on for its strip measurements with
  * registerHorizontalStrips(openmct, 'bom.telemetry', 'bom', ['pitch', 'roll']).
+ * Optional 5th argument, per key: { aoa: { scale: [-10, 30], gridStep: 10,
+ * limit: () => 16, onLimitChange: (cb) => unsubscribe } } for a different
+ * scale and a red dashed limit line (e.g. critical AoA).
  */
 
 import dataClock, { formatElapsed } from '../dataSource/dataClock.js';
 import { getRecorder } from '../rawData/recorder.js';
+import dataMarkers, { drawMarkerLine, MARKER_HIT_PX } from './dataMarkers.js';
 
 export const HORIZONTAL_STRIP_VIEW_KEY = 'flight.horizontalStrip';
 
 const RANGE_DEG = 90;
 const GRID_DEG = 30;
 const TRACE_COLOR = '#43b0ff'; // same blue as the dashboard strips
+const LIMIT_COLOR = '#ff4d4d';
 const MARGIN = { left: 40, right: 12, top: 22, bottom: 22 };
 const MIN_SPAN_MS = 10000; // never squeeze less than 10 s across the width
 const MIN_TICK_SPACING_PX = 90;
 const STEPS_S = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600];
 
-const registry = new Map(); // telemetry type -> { sourceId, keys: Set }
+const registry = new Map(); // telemetry type -> { sourceId, keys: Set, options: { key: {...} } }
 let providerAdded = false;
 
 function utcText(timestamp) {
@@ -62,12 +70,16 @@ function HorizontalStripViewProvider(openmct) {
     view(domainObject) {
       const sourceId = sourceFor(domainObject);
       const key = domainObject.identifier.key;
+      const options = registry.get(domainObject.type).options[key] || {};
+      const [scaleMin, scaleMax] = options.scale || [-RANGE_DEG, RANGE_DEG];
+      const gridStep = options.gridStep || GRID_DEG;
       const cleanups = [];
       let canvas;
       let ctx;
       let container;
       let hoverX = null;
       let drawQueued = false;
+      let timeScale = null; // { left, right, top, bottom, tStart, tEnd } from the last draw
 
       function scheduleDraw() {
         if (!drawQueued) {
@@ -132,8 +144,8 @@ function HorizontalStripViewProvider(openmct) {
         const top = MARGIN.top;
         const bottom = height - MARGIN.bottom;
         const yFor = (value) => {
-          const v = Math.max(-RANGE_DEG, Math.min(RANGE_DEG, value));
-          return top + ((RANGE_DEG - v) / (2 * RANGE_DEG)) * (bottom - top);
+          const v = Math.max(scaleMin, Math.min(scaleMax, value));
+          return top + ((scaleMax - v) / (scaleMax - scaleMin)) * (bottom - top);
         };
 
         ctx.font = '11px sans-serif';
@@ -142,7 +154,7 @@ function HorizontalStripViewProvider(openmct) {
         // Degree gridlines and labels.
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
-        for (let deg = -RANGE_DEG; deg <= RANGE_DEG; deg += GRID_DEG) {
+        for (let deg = scaleMin; deg <= scaleMax; deg += gridStep) {
           const y = Math.round(yFor(deg)) + 0.5;
           ctx.strokeStyle = deg === 0 ? 'rgba(127,127,127,0.7)' : 'rgba(127,127,127,0.25)';
           ctx.beginPath();
@@ -157,8 +169,24 @@ function HorizontalStripViewProvider(openmct) {
         ctx.strokeStyle = 'rgba(127,127,127,0.4)';
         ctx.strokeRect(left + 0.5, top + 0.5, right - left - 1, bottom - top - 1);
 
+        // Optional limit line (e.g. critical AoA).
+        const limit = options.limit ? options.limit() : null;
+        if (Number.isFinite(limit) && limit >= scaleMin && limit <= scaleMax) {
+          const y = Math.round(yFor(limit)) + 0.5;
+          ctx.save();
+          ctx.strokeStyle = LIMIT_COLOR;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.beginPath();
+          ctx.moveTo(left, y);
+          ctx.lineTo(right, y);
+          ctx.stroke();
+          ctx.restore();
+        }
+
         const { times, values } = series();
         if (!times.length) {
+          timeScale = null;
           ctx.fillStyle = textColor;
           ctx.globalAlpha = 0.6;
           ctx.textAlign = 'center';
@@ -172,6 +200,7 @@ function HorizontalStripViewProvider(openmct) {
         const tEnd = Math.max(times[times.length - 1], tStart + MIN_SPAN_MS);
         const xFor = (t) => left + ((t - tStart) / (tEnd - tStart)) * (right - left);
         const tFor = (x) => tStart + ((x - left) / (right - left)) * (tEnd - tStart);
+        timeScale = { left, right, top, bottom, tStart, tEnd };
 
         // Time gridlines: UTC above, time since data start below.
         const zero = dataClock.start === null ? tStart : dataClock.start;
@@ -253,6 +282,14 @@ function HorizontalStripViewProvider(openmct) {
         flush();
         ctx.stroke();
 
+        // Data markers: green dashed lines up the chart (inside the clip).
+        dataMarkers.list().forEach((marker) => {
+          if (marker.timestamp >= tStart && marker.timestamp <= tEnd) {
+            const x = Math.round(xFor(marker.timestamp)) + 0.5;
+            drawMarkerLine(ctx, x, top, x, bottom, marker.number);
+          }
+        });
+
         // Newest value marker.
         ctx.fillStyle = TRACE_COLOR;
         ctx.beginPath();
@@ -310,12 +347,31 @@ function HorizontalStripViewProvider(openmct) {
             hoverX = null;
             scheduleDraw();
           });
+          canvas.title = 'Double-click: add or remove a data marker';
+          canvas.addEventListener('dblclick', (event) => {
+            if (!timeScale) {
+              return;
+            }
+            const { left, right, top, bottom, tStart, tEnd } = timeScale;
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            if (x < left || x > right || y < top || y > bottom) {
+              return;
+            }
+            const msPerPx = (tEnd - tStart) / (right - left);
+            dataMarkers.toggle(tStart + (x - left) * msPerPx, MARKER_HIT_PX * msPerPx);
+          });
+          cleanups.push(dataMarkers.onChange(scheduleDraw));
 
           const resizeObserver = new ResizeObserver(scheduleDraw);
           resizeObserver.observe(container);
           cleanups.push(() => resizeObserver.disconnect());
           cleanups.push(getRecorder(sourceId).onChange(scheduleDraw));
           cleanups.push(dataClock.onChange(scheduleDraw));
+          if (options.onLimitChange) {
+            cleanups.push(options.onLimitChange(scheduleDraw));
+          }
           scheduleDraw();
         },
 
@@ -328,8 +384,8 @@ function HorizontalStripViewProvider(openmct) {
   };
 }
 
-export function registerHorizontalStrips(openmct, type, sourceId, keys) {
-  registry.set(type, { sourceId, keys: new Set(keys) });
+export function registerHorizontalStrips(openmct, type, sourceId, keys, options = {}) {
+  registry.set(type, { sourceId, keys: new Set(keys), options });
   if (!providerAdded) {
     providerAdded = true;
     openmct.objectViews.addProvider(HorizontalStripViewProvider(openmct));

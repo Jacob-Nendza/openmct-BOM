@@ -10,6 +10,8 @@
  *               from the limit box, and the scale is set from those limits.
  *               A parameter with a fixed `scale` (Pressure Altitude: 0-20k)
  *               uses that instead and has no red lines.
+ *               Scroll the mouse wheel to look back in time (./timeScroll.js);
+ *               double-click to drop a data marker (./dataMarkers.js).
  *   tolerance - test-point tolerance bar. You type the center value and the
  *               +/-; the bar is green inside center +/- tolerance and red
  *               above/below it, the scale runs center +/- 2x tolerance, and a
@@ -25,6 +27,9 @@
  * `source` is the measurement key the value comes from, so the displays show
  * exactly what is recorded (e.g. KCAS, ../bomData/dictionary.js).
  */
+
+import dataMarkers, { CANVAS_HELP, drawMarkerLine, MARKER_HIT_PX } from './dataMarkers.js';
+import { createTimeScroll } from './timeScroll.js';
 
 const GREEN = '#15803d';
 const RED = '#c62828';
@@ -130,6 +135,7 @@ function label(text, extraStyle = '') {
 export function createParamFeed(openmct, child, param, settings, onClearData) {
   const samples = [];
   const listeners = new Set();
+  const clearListeners = new Set();
   let destroyed = false;
 
   function notify() {
@@ -164,6 +170,7 @@ export function createParamFeed(openmct, child, param, settings, onClearData) {
   const stopSettings = settings.onChange(notify);
   onClearData(() => {
     samples.length = 0;
+    clearListeners.forEach((listener) => listener());
     notify();
   });
 
@@ -171,6 +178,14 @@ export function createParamFeed(openmct, child, param, settings, onClearData) {
     param,
     child,
     samples,
+    // History for scrolling back past what the feed keeps in memory.
+    request(start, end) {
+      return openmct.telemetry.request(child, { start, end });
+    },
+    onClear(listener) {
+      clearListeners.add(listener);
+      return () => clearListeners.delete(listener);
+    },
     latest() {
       return samples.length ? samples[samples.length - 1].value : NaN;
     },
@@ -183,6 +198,7 @@ export function createParamFeed(openmct, child, param, settings, onClearData) {
       unsubscribe();
       stopSettings();
       listeners.clear();
+      clearListeners.clear();
     }
   };
 }
@@ -286,7 +302,19 @@ export function buildTrace(body, paramKey, feed, settings, cleanups) {
     const top = TRACE_HEADER_PX;
     const bottom = height - 1;
     const xFor = (v) => left + ((Math.max(lo, Math.min(hi, v)) - lo) / (hi - lo)) * (right - left);
-    const current = feed.latest();
+    const samples = feed.samples;
+    const newest = samples.length ? samples[samples.length - 1].timestamp : null;
+    const viewNow = scroll.frame(newest);
+    const nowY = top + 4;
+    const oldestShown = viewNow === null ? 0 : viewNow - ((bottom - nowY) / TRACE_PX_PER_S) * 1000;
+    const shown = viewNow === null ? [] : scroll.samplesBetween(oldestShown, viewNow + 1000);
+    view = viewNow === null ? null : { newest, viewNow, nowY, top, bottom };
+    // Scrolled back: the header shows the value at the top of the view.
+    let current = feed.latest();
+    if (!scroll.isLive()) {
+      const atTop = shown.filter((sample) => sample.timestamp <= viewNow).pop();
+      current = atTop ? atTop.value : NaN;
+    }
 
     // Header: scale minimum, (current value), scale maximum.
     ctx.font = '11px sans-serif';
@@ -326,8 +354,6 @@ export function buildTrace(body, paramKey, feed, settings, cleanups) {
       });
     }
 
-    const samples = feed.samples;
-    const nowY = top + 4;
     if (!samples.length) {
       // No data yet: still show the 2 s grid, fixed.
       ctx.strokeStyle = 'rgba(127,127,127,0.35)';
@@ -344,12 +370,12 @@ export function buildTrace(body, paramKey, feed, settings, cleanups) {
     // Time runs down from "now" (the newest sample, so the chart freezes when
     // data stops). The 2 s gridlines are tied to the clock, so they scroll
     // with the data like chart paper.
-    const newest = samples[samples.length - 1].timestamp;
-    const yFor = (t) => nowY + ((newest - t) / 1000) * TRACE_PX_PER_S;
+    // Scrolled back (mouse wheel), "now" is that earlier time instead.
+    const yFor = (t) => nowY + ((viewNow - t) / 1000) * TRACE_PX_PER_S;
     const gridMs = TRACE_GRID_S * 1000;
     ctx.strokeStyle = 'rgba(127,127,127,0.35)';
     ctx.lineWidth = 1;
-    for (let t = Math.floor(newest / gridMs) * gridMs; yFor(t) < bottom; t -= gridMs) {
+    for (let t = Math.floor(viewNow / gridMs) * gridMs; yFor(t) < bottom; t -= gridMs) {
       const y = Math.round(yFor(t)) + 0.5;
       ctx.beginPath();
       ctx.moveTo(left, y);
@@ -364,25 +390,61 @@ export function buildTrace(body, paramKey, feed, settings, cleanups) {
     ctx.strokeStyle = TRACE_BLUE;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    for (let i = samples.length - 1; i >= 0; i--) {
-      const y = yFor(samples[i].timestamp);
-      const x = xFor(samples[i].value);
-      if (i === samples.length - 1) {
+    for (let i = shown.length - 1; i >= 0; i--) {
+      const y = yFor(shown[i].timestamp);
+      const x = xFor(shown[i].value);
+      if (i === shown.length - 1) {
         ctx.moveTo(x, y);
       } else {
         ctx.lineTo(x, y);
       }
-      if (y > bottom) {
-        break;
-      }
     }
     ctx.stroke();
-    ctx.fillStyle = TRACE_BLUE;
-    ctx.fillRect(xFor(current) - 3, nowY - 3, 6, 6); // square marker on "now", like the slide
+
+    // Data markers: green dashed lines across the trace.
+    dataMarkers.list().forEach((marker) => {
+      const y = Math.round(yFor(marker.timestamp)) + 0.5;
+      if (y >= top && y <= bottom) {
+        drawMarkerLine(ctx, left, y, right, y, marker.number);
+      }
+    });
+
+    if (scroll.isLive()) {
+      ctx.fillStyle = TRACE_BLUE;
+      ctx.fillRect(xFor(current) - 3, nowY - 3, 6, 6); // square marker on "now", like the slide
+    }
     ctx.restore();
   }
 
+  // Scroll back in time with the mouse wheel (./timeScroll.js).
+  let view = null; // what the last draw showed, for double-click markers
   const scheduleDraw = frameScheduler(draw);
+  const scroll = createTimeScroll({
+    body,
+    canvas,
+    samples: feed.samples,
+    pxPerSecond: TRACE_PX_PER_S,
+    request: (start, end) => feed.request(start, end),
+    redraw: scheduleDraw
+  });
+  cleanups.push(() => scroll.destroy());
+  cleanups.push(feed.onClear(() => scroll.reset()));
+
+  // Double-click: add a data marker at that time (or remove the one there).
+  canvas.title = CANVAS_HELP;
+  canvas.addEventListener('dblclick', (event) => {
+    if (!view) {
+      return;
+    }
+    const y = event.clientY - canvas.getBoundingClientRect().top;
+    if (y < view.top || y > view.bottom) {
+      return; // the scale header
+    }
+    const timestamp = Math.min(view.newest, scroll.timeAtY(y, view.nowY, view.viewNow));
+    dataMarkers.toggle(timestamp, (MARKER_HIT_PX / TRACE_PX_PER_S) * 1000);
+  });
+  cleanups.push(dataMarkers.onChange(scheduleDraw));
+
   const resizeObserver = new ResizeObserver(scheduleDraw);
   resizeObserver.observe(body);
   cleanups.push(feed.onUpdate(scheduleDraw));

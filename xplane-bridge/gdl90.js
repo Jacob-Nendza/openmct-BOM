@@ -244,10 +244,12 @@ function decode(msg) {
                     verticalSpeedFpm: f(20, 1),
                 };
             }
-            return { type: 'levil-other', subId: b[1] };
+            // Another Levil message (sub-ID / type not decoded yet). Raw bytes are
+            // kept so the bridge can log them for reverse-engineering.
+            return { type: 'levil-other', subId: b[1], msgType: b[2], bytes: b };
         }
         default:
-            return { type: 'unknown', id: msg.id };
+            return { type: 'unknown', id: msg.id, bytes: b };
     }
 }
 

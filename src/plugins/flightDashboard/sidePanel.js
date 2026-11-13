@@ -223,3 +223,62 @@ export function testPointResetSection(settings) {
     body.append(reset);
   };
 }
+
+/*
+ * A list of named numbers typed into the panel (saved with settings.setInput),
+ * e.g. the BOM's True AoA inputs. fields: [{ key, label, units, help, allowBlank }].
+ * status (optional): { text() -> string, onChange(cb) -> unsubscribe } for a
+ * live line under the inputs (e.g. the current AoA, or why it's blank).
+ */
+export function inputFieldsSection(settings, { intro, fields, status }, cleanups) {
+  return (body) => {
+    if (intro) {
+      body.append(note(intro));
+    }
+    const grid = document.createElement('div');
+    grid.style.cssText =
+      'display:grid; grid-template-columns:auto 80px auto; gap:4px 6px; align-items:center;';
+    const inputs = fields.map((field) => {
+      const name = document.createElement('div');
+      name.textContent = field.label;
+      name.title = field.help || '';
+      name.style.cssText = 'cursor:help;';
+      const input = numberInput(
+        () => settings.get().inputs[field.key],
+        (value) => settings.setInput(field.key, value),
+        { width: 80, allowBlank: !!field.allowBlank }
+      );
+      input.element.title = field.help || '';
+      if (field.allowBlank) {
+        input.element.placeholder = 'std';
+      }
+      const units = document.createElement('div');
+      units.textContent = field.units || '';
+      units.style.cssText = 'opacity:0.7;';
+      grid.append(name, input.element, units);
+      return input;
+    });
+    body.append(grid, note('Hover a name for what it means.'));
+
+    cleanups.push(settings.onChange(() => inputs.forEach((input) => input.refresh())));
+
+    if (status) {
+      const live = document.createElement('div');
+      live.style.cssText = 'font-variant-numeric:tabular-nums;';
+      body.append(live);
+      let queued = false;
+      const render = () => {
+        if (queued) {
+          return;
+        }
+        queued = true;
+        requestAnimationFrame(() => {
+          queued = false;
+          live.textContent = status.text();
+        });
+      };
+      cleanups.push(status.onChange(render));
+      render();
+    }
+  };
+}

@@ -7,6 +7,7 @@
  */
 
 import bridgeClient from '../dataSource/bridgeClient.js';
+import { getRecorder } from '../rawData/recorder.js';
 import { measurements } from './dictionary.js';
 
 export default function BOMRealtimeTelemetryPlugin() {
@@ -18,6 +19,11 @@ export default function BOMRealtimeTelemetryPlugin() {
       subscribe: function (domainObject, callback) {
         const key = domainObject.identifier.key;
         const measurement = measurements.find((m) => m.key === key);
+        if (measurement && measurement.derive && measurement.derive.inputs) {
+          // Worked out from several values (True AoA): the recorder computes it
+          // once a packet is complete and passes each live result on.
+          return getRecorder('bom').subscribeDerived(key, callback);
+        }
         if (measurement && measurement.derive) {
           // Worked-out value (e.g. KCAS): listen to its input and convert.
           const { from, compute } = measurement.derive;

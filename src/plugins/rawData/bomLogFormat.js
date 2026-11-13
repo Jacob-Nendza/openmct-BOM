@@ -22,13 +22,24 @@
  *   - DATE / UTC_TIME come from the time the bridge received the packet (this
  *     computer's clock, in UTC), not from the BOM's GPS clock.
  *   - Only columns Open MCT actually receives are filled (see COLUMN_KEYS).
- *     The rest - GPS_FIX, SATELLITES, ACC_X, AOA, BAT_LEVEL, ... - aren't in
- *     the BOM's GDL90 broadcast, so they are left blank rather than invented.
+ *     The rest - SATELLITES, ACC_X, AOA, BAT_LEVEL, ... - aren't decoded from
+ *     the BOM's GDL90 broadcast (yet), so they are left blank rather than
+ *     invented. (xplane-bridge/sources/bom.js captures undecoded messages so
+ *     they can be found and added later.)
+ *   - GPS_FIX comes from the GDL90 Heartbeat: 1 = valid fix, 0 = none. The
+ *     BOM's own SD log writes a fix TYPE here (e.g. 4, 132), so compare
+ *     "0 vs non-zero", not the exact number.
+ *   - NIC / Horizontal_rc come from the Ownship Report. Horizontal_rc is the
+ *     containment radius for that NIC in meters (37041 = unknown), as the BOM
+ *     writes it.
  *
  * Extra columns: a source can add columns AFTER the BOM's 41 (EXTRA_COLUMNS),
  * so every standard column keeps its position. BOM exports add KCAS
  * (calibrated airspeed, worked out in Open MCT from AIRSPEED with the
- * Inputs-panel correction table).
+ * Inputs-panel correction table) and NACP (GPS position accuracy category,
+ * from the Ownship Report - the BOM's SD log has no column for it) and
+ * TRUE_AOA (degrees, worked out in Open MCT - see ../bomData/trueAoa.js; the
+ * standard AOA column is the BOM's own 0..1 ratio, so it stays separate).
  *
  * Rows: the BOM sends each update as a burst of GDL90 messages (Ownship,
  * Geometric Altitude, AHRS), which the recorder stores as separate rows a few
@@ -86,7 +97,11 @@ export const BOM_LOG_COLUMNS = [
 
 // Columns added after the standard ones, per source: [LEGEND name, UNITS].
 export const EXTRA_COLUMNS = {
-  bom: [['KCAS', 'kts']]
+  bom: [
+    ['KCAS', 'kts'],
+    ['NACP', '---'],
+    ['TRUE_AOA', 'deg']
+  ]
 };
 
 function columnsFor(sourceId) {
@@ -113,7 +128,12 @@ export const COLUMN_KEYS = {
     SLIP: 'slip',
     YAWRATE: 'yaw_rate',
     Gs: 'g_load',
-    KCAS: 'kcas'
+    GPS_FIX: 'gps_fix',
+    NIC: 'nic',
+    Horizontal_rc: 'horizontal_rc',
+    KCAS: 'kcas',
+    NACP: 'nacp',
+    TRUE_AOA: 'aoa'
   },
   // X-Plane in the same layout, so sim runs and flights can be compared with
   // the same scripts. Note: X-Plane's heading is TRUE (the BOM's is magnetic)
@@ -132,7 +152,7 @@ export const COLUMN_KEYS = {
 };
 
 // Decimal places per column, as the BOM writes them (trailing zeros dropped,
-// so 2.0 -> "2"). Matches the resolution GDL90 actually delivers.
+// so 2.0 -> "2"). PALT is whole feet, which the 1 ft AHRS altitude now fills.
 const DECIMALS = {
   LATITUDE: 6,
   LONGITUDE: 6,
@@ -150,7 +170,12 @@ const DECIMALS = {
   SLIP: 1,
   YAWRATE: 1,
   Gs: 1,
-  KCAS: 1
+  GPS_FIX: 0,
+  NIC: 0,
+  Horizontal_rc: 1,
+  KCAS: 1,
+  NACP: 0,
+  TRUE_AOA: 1
 };
 
 // Samples closer together than this (and with no repeated value) are one burst.
